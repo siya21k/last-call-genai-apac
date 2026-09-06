@@ -287,3 +287,21 @@ Every user interaction has a corresponding end-to-end test verification procedur
 2. **Expected Outcome**:
    - Partner view displays solely aggregate daily strip line and hard-consequence escalation alert. All raw tasks, check-in chats, and journal entries are strictly blocked.
    - Clicking "Disconnect as Partner" calls `POST /api/partner/revoke`, clears claims, and returns user to standard mode.
+
+### Test Case 12: Journal Semantic Retrieval, Embedding Fallback & Supportive Reflection
+1. **Action**: Switch to the **Reflect** tab in the side panel. Submit a journal entry (e.g. `"Feeling stuck on administrative paperwork again this week"`).
+2. **Expected Outcome**:
+   - **Embedding Model Ladder**: The backend computes embeddings using `gemini-embedding-2-preview`, falling back to `gemini-embedding-001` (the deprecated and shut-down `text-embedding-004` is completely excluded).
+   - **Trustworthy Fallback Guarantee**: If all real embedding models are unreachable, semantic retrieval is **skipped entirely** rather than generating fabricated hash-based matches. The model generates a supportive reflection based strictly on the current entry alone.
+   - **Isolated Retrieval**: If past entries exist with real embeddings, cosine similarity searches only the current user's past entries (`users/{userId}/journalEntries`) — zero cross-user data leakage.
+   - **Human-in-the-Loop Partner Outreach**: If a persistent multi-day heavy pattern is observed, Gemini optionally suggests a short drafted note to the partner. The note is never sent automatically; the user must explicitly review and send it.
+   - **Crisis Safety Net**: If crisis or self-harm language is detected, the static, unalterable emergency resource block is returned immediately; all AI reflection and partner outreach suggestions are strictly suppressed.
+
+### Test Case 13: Check-in Tone Safety Directive, Validation Pass & Fallback (Section 20)
+1. **Action**: Start a check-in on a task (either from the buddy list "Check In" button or by typing `"stuck on studying"` in the main thread). Express panic or fear (e.g. `"I feel like I'm going to fail tomorrow"`).
+2. **Expected Outcome**:
+   - **Distinction Between Fear & Avoidance**: The response does not issue an ultimatum or push past the fear. It briefly validates the anxiety first, then redirects directly to a 2-minute physical start (e.g. `"Failing tomorrow doesn't erase what you can read tonight. What's the actual first page you'd open right now?"`).
+   - **Absolute Ban on Quit-Framing**: The system never presents giving up, quitting, or closing tabs as an option (e.g. "Either revise or close the tab" is strictly forbidden and rejected).
+   - **Validation Pass**: Every generated coaching turn is inspected by a structured validator. If any ultimatum, quit-framing, or personal critique is detected, the turn is flagged and regenerated once with explicit corrective directives.
+   - **Guaranteed Safe Fallback**: If two generation attempts fail tone validation, the engine automatically falls back to an immutable, safe generic supportive line (`"You don't have to tackle the whole thing at once. What is the single smallest physical micro-action you can take for '<task>' right now?"`)—never permitting an unvalidated response to reach the user.
+

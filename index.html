@@ -4,6 +4,45 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Last Call — ADHD Deadline & Focus Journal</title>
+    <script>
+      (function() {
+        function isBenignHmrError(msg) {
+          if (!msg) return false;
+          var str = typeof msg === 'string' ? msg : (msg.message || String(msg));
+          return str.indexOf('failed to connect to websocket') !== -1 ||
+                 str.indexOf('WebSocket closed without opened') !== -1 ||
+                 (str.indexOf('[vite]') !== -1 && str.indexOf('websocket') !== -1);
+        }
+
+        window.addEventListener('unhandledrejection', function(event) {
+          if (isBenignHmrError(event.reason)) {
+            event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
+          }
+        }, true);
+
+        window.addEventListener('error', function(event) {
+          if (isBenignHmrError(event.message) || isBenignHmrError(event.error)) {
+            event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
+          }
+        }, true);
+
+        var origError = console.error;
+        console.error = function() {
+          for (var i = 0; i < arguments.length; i++) {
+            if (isBenignHmrError(arguments[i])) {
+              return;
+            }
+          }
+          return origError.apply(console, arguments);
+        };
+      })();
+    </script>
     <meta name="description" content="A user-authenticated deadline-and-focus journal for people with ADHD/time-blindness with Gemini task initiation check-ins and Firestore accountability tracking." />
     <meta property="og:title" content="Last Call — ADHD Deadline & Focus Journal" />
     <meta property="og:description" content="A user-authenticated deadline-and-focus journal for people with ADHD/time-blindness with Gemini task initiation check-ins and Firestore accountability tracking." />

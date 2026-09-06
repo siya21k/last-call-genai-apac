@@ -44,7 +44,16 @@ export interface JournalEntry {
   title?: string | null;
   link?: string | null;
   tags?: string[];
+  embedding?: number[];
+  reflection?: string | null;
+  isCrisis?: boolean;
+  similarEntryIds?: string[];
   createdAt: string;
+}
+
+export interface PartnerNote {
+  text: string;
+  sentAt: string;
 }
 
 export interface DailyStripItem {
@@ -92,6 +101,8 @@ export interface PartnerStatusView {
   hasHardConsequenceInEscalationWindow: boolean;
   ownerName?: string;
   ownerUid?: string;
+  latestNote?: string | null;
+  latestNoteAt?: string | null;
 }
 
 export interface UserProfile {
@@ -101,6 +112,7 @@ export interface UserProfile {
   photoURL: string | null;
   role?: 'owner' | 'partner';
   ownerUid?: string | null;
+  partnerNote?: PartnerNote | null;
   anchorTimes?: AnchorTimes;
   notificationToken?: string;
   timezone?: string;

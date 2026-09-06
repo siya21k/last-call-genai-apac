@@ -17,6 +17,7 @@ import type {
   UserProfile,
   JournalEntry,
   PresenceState,
+  PartnerNote,
 } from '../src/types';
 
 // Load Firebase applet configuration
@@ -1096,7 +1097,16 @@ export async function getJournalEntries(uid: string): Promise<JournalEntry[]> {
 
 export async function createJournalEntry(
   uid: string,
-  params: { text: string; title?: string | null; link?: string | null; tags?: string[] }
+  params: {
+    text: string;
+    title?: string | null;
+    link?: string | null;
+    tags?: string[];
+    embedding?: number[];
+    reflection?: string | null;
+    isCrisis?: boolean;
+    similarEntryIds?: string[];
+  }
 ): Promise<JournalEntry> {
   const entryId = 'jnl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   const nowIso = new Date().toISOString();
@@ -1107,6 +1117,10 @@ export async function createJournalEntry(
     title: params.title ? params.title.trim() : null,
     link: params.link ? params.link.trim() : null,
     tags: Array.isArray(params.tags) ? params.tags : [],
+    embedding: Array.isArray(params.embedding) ? params.embedding : undefined,
+    reflection: params.reflection ? params.reflection.trim() : null,
+    isCrisis: Boolean(params.isCrisis),
+    similarEntryIds: Array.isArray(params.similarEntryIds) ? params.similarEntryIds : [],
     createdAt: nowIso,
   };
 
@@ -1128,6 +1142,48 @@ export async function createJournalEntry(
   saveLocalStore(store);
 
   return entry;
+}
+
+export async function savePartnerNote(
+  ownerUid: string,
+  note: { text: string; sentAt: string }
+): Promise<PartnerNote> {
+  const sanitizedNote: PartnerNote = {
+    text: note.text.trim(),
+    sentAt: note.sentAt || new Date().toISOString(),
+  };
+
+  try {
+    await adminDb
+      .collection('users')
+      .doc(ownerUid)
+      .set({ partnerNote: sanitizedNote }, { merge: true });
+  } catch (err: any) {
+    console.warn('[DB] Fallback savePartnerNote:', err.message);
+  }
+
+  const store = loadLocalStore();
+  if (store.users[ownerUid]) {
+    store.users[ownerUid].partnerNote = sanitizedNote;
+    saveLocalStore(store);
+  }
+
+  return sanitizedNote;
+}
+
+export async function getPartnerNote(ownerUid: string): Promise<PartnerNote | null> {
+  try {
+    const docSnap = await adminDb.collection('users').doc(ownerUid).get();
+    if (docSnap.exists) {
+      const data = docSnap.data();
+      return (data?.partnerNote as PartnerNote) || null;
+    }
+  } catch (err: any) {
+    console.warn('[DB] Fallback getPartnerNote:', err.message);
+  }
+
+  const store = loadLocalStore();
+  return store.users[ownerUid]?.partnerNote || null;
 }
 
 export async function deleteJournalEntry(uid: string, entryId: string): Promise<void> {

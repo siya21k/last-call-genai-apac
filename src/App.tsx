@@ -460,11 +460,35 @@ export function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        setJournalEntries((prev) => [data.entry, ...prev]);
+        if (data.entry) {
+          setJournalEntries((prev) => [data.entry, ...prev]);
+        }
         await loadWorkspaceData();
+        return data;
       }
     } catch (err) {
       console.error('Error adding journal entry:', err);
+    }
+  };
+
+  // Send Partner Note (Human-in-the-Loop partner outreach)
+  const handleSendPartnerNote = async (text: string) => {
+    if (!token || !text.trim()) return;
+    try {
+      const res = await fetch('/api/partner/note', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: text.trim() }),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error('Error sending partner note:', err);
+      throw err;
     }
   };
 
@@ -1065,6 +1089,28 @@ export function App() {
                 </div>
               </div>
 
+              {/* Partner Note Display (Human-in-the-Loop Partner Outreach) */}
+              {partnerStatus?.latestNote && (
+                <div>
+                  <span className="font-bold text-[11px] uppercase tracking-wider text-stone-600 flex items-center justify-between">
+                    <span>Latest Note from Focus Partner</span>
+                    {partnerStatus.latestNoteAt && (
+                      <span className="text-[10px] font-mono text-stone-500 font-normal">
+                        {new Date(partnerStatus.latestNoteAt).toLocaleDateString([], {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    )}
+                  </span>
+                  <div className="mt-1.5 p-3.5 rounded-xl border-2 border-[#52b7aa] bg-[#f0fbf8] text-stone-900 text-xs font-medium shadow-[2px_2px_0px_#2d2825]">
+                    <p className="whitespace-pre-wrap leading-relaxed italic">"{partnerStatus.latestNote}"</p>
+                  </div>
+                </div>
+              )}
+
               {/* End Relationship Confirmation Box */}
               {showEndPartnerConfirm ? (
                 <div className="p-3 bg-[#ffe8e5] border-2 border-rose-600 rounded-xl space-y-2 animate-in fade-in duration-150">
@@ -1149,6 +1195,7 @@ export function App() {
                 journalEntries={journalEntries}
                 onAddJournalEntry={handleAddJournalEntry}
                 onDeleteJournalEntry={handleDeleteJournalEntry}
+                onSendPartnerNote={handleSendPartnerNote}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenPartner={() => setIsPartnerModalOpen(true)}
                 isLoading={loadingData}

@@ -801,9 +801,143 @@ Rules:
 }
 
 /**
+ * Section 20: Check-in Tone Safety Directive
+ * Validation Schema for evaluating candidate check-in responses.
+ */
+const CHECK_IN_VALIDATION_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    isSafe: {
+      type: Type.BOOLEAN,
+      description:
+        'True ONLY if the response obeys all Section 20 principles: no ultimatums, no suggestions to quit/disengage, and no attacks on the person.',
+    },
+    containsUltimatum: {
+      type: Type.BOOLEAN,
+      description:
+        'True if the response contains an ultimatum, "either/or" condition, or coercive demand (e.g. "either do X or close tab").',
+    },
+    suggestsQuitOrDisengage: {
+      type: Type.BOOLEAN,
+      description:
+        'True if the response suggests, implies, or presents quitting, giving up, abandoning, walking away, or closing the tab as an option or alternative.',
+    },
+    targetsPersonNotTask: {
+      type: Type.BOOLEAN,
+      description:
+        'True if the response critiques, shames, or attacks the user\'s character, effort, or worth rather than the task or avoidance.',
+    },
+    violationSummary: {
+      type: Type.STRING,
+      description: 'Specific tone safety principle violated, or "none" if safe.',
+    },
+  },
+  required: ['isSafe', 'containsUltimatum', 'suggestsQuitOrDisengage', 'targetsPersonNotTask', 'violationSummary'],
+};
+
+/**
+ * Heuristic fast-path check for obvious tone safety violations (Section 20).
+ */
+function heuristicToneViolationCheck(candidateText: string): string[] {
+  const violations: string[] = [];
+  const text = candidateText.toLowerCase();
+
+  // Pattern 1: Binary ultimatum with quit/abandon framing
+  if (
+    /\beither\b[\s\S]{1,60}\bor\b[\s\S]{1,60}(quit|give up|walk away|close (the )?tab|forget it|stop trying|abandon)\b/i.test(
+      text
+    )
+  ) {
+    violations.push('Binary ultimatum presenting quitting or closing tabs as an option');
+  }
+
+  // Pattern 2: Suggestions to close tab / give up / walk away
+  if (/\b(close (the )?tab|close your tab|give up|just quit|walk away|abandon it|stop trying)\b/i.test(text)) {
+    violations.push('Suggestion to quit, disengage, or close tab');
+  }
+
+  // Pattern 3: Language targeting the person's character rather than the task
+  if (/\b(you('re| are) (lazy|worthless|hopeless|incapable|a failure))\b/i.test(text)) {
+    violations.push('Language targeting the person rather than the task');
+  }
+
+  return violations;
+}
+
+/**
+ * Section 20 Validation Pass:
+ * Runs lightweight check verifying candidate response contains no ultimatums, no quit-framing,
+ * and targets task/avoidance rather than person.
+ */
+export async function validateCheckInResponse(
+  candidateText: string,
+  userMessage: string,
+  taskName: string
+): Promise<{ isSafe: boolean; violatedPrinciples: string[] }> {
+  // 1. Fast heuristic check
+  const heuristicViolations = heuristicToneViolationCheck(candidateText);
+  if (heuristicViolations.length > 0) {
+    return { isSafe: false, violatedPrinciples: heuristicViolations };
+  }
+
+  // 2. Model-based structured evaluation pass
+  const validationPrompt = `Task being worked on: "${taskName}"
+User message: "${userMessage}"
+Candidate check-in response to evaluate:
+"${candidateText}"
+
+Evaluate whether this candidate response obeys the following mandatory principles:
+1. No ultimatums: It must never issue an "either/or" demand or threat.
+2. No quit-framing: Giving up, quitting, abandoning the task, or closing the tab must NEVER be presented as an option, in any framing, including as one side of a binary choice.
+3. Target the task, not the person: It must target the task or avoidance behavior, never insulting or degrading the user's character or worth.
+
+Return structured JSON according to schema.`;
+
+  try {
+    const rawJson = await generateContentWithFallback(validationPrompt, {
+      systemInstruction:
+        'You are an impartial tone safety auditor for an ADHD focus assistant. Strictly check for ultimatums, quit-framing, or personal attacks.',
+      responseMimeType: 'application/json',
+      responseSchema: CHECK_IN_VALIDATION_SCHEMA,
+      temperature: 0.0,
+      maxOutputTokens: 150,
+    });
+
+    const parsed = JSON.parse(rawJson);
+    const violated: string[] = [];
+    if (parsed.containsUltimatum) violated.push('Contains ultimatum or either/or demand');
+    if (parsed.suggestsQuitOrDisengage) violated.push('Presents quitting, giving up, or closing tabs as an option');
+    if (parsed.targetsPersonNotTask) violated.push('Targets person rather than task');
+    if (parsed.violationSummary && parsed.violationSummary !== 'none' && violated.length === 0) {
+      violated.push(parsed.violationSummary);
+    }
+
+    const isSafe = parsed.isSafe === true && violated.length === 0;
+    return { isSafe, violatedPrinciples: violated };
+  } catch (err: any) {
+    console.warn('[Gemini Tone Validation] Validation pass error (falling back to heuristic):', err?.message || err);
+    // If structured call fails, heuristic passed above, so assume safe
+    return { isSafe: true, violatedPrinciples: [] };
+  }
+}
+
+/**
+ * Fixed, safe, generic supportive line per Section 20.
+ * Returned if generation fails or is flagged twice by tone safety validation.
+ * Never risks exposing the user to an unvalidated response.
+ */
+export function getFixedSafeCoachingFallback(taskName: string): string {
+  const safeName = (taskName || 'this task').trim();
+  return `You don't have to tackle the whole thing at once. What is the single smallest physical micro-action you can take for '${safeName}' right now?`;
+}
+
+/**
  * Multi-turn Task Initiation Coaching Turn:
- * Generates blunt, irreverent toward avoidance, warm toward person response.
- * Called directly during an active check-in exchange or from direct board button initiation.
+ * Section 20 Check-in Tone Safety Directive implementation.
+ * - General principles: no quit-framing, distinguish avoidance from fear/distress,
+ *   default to gentler response under uncertainty, target task not person.
+ * - Validation pass with 1 regeneration attempt on flag.
+ * - Immutable safe fallback if flagged twice.
  */
 export async function generateCheckInCoaching(
   task: { id: string; name: string; dueAt?: string; consequenceType?: string },
@@ -815,30 +949,96 @@ export async function generateCheckInCoaching(
     .map((m) => `${m.role === 'user' ? 'User' : 'Last Call'}: ${m.text}`)
     .join('\n');
 
-  const systemInstruction = `You are "Last Call", a task initiation coach for adults with ADHD, executive dysfunction, and time-blindness.
+  const baseSystemInstruction = `You are "Last Call", a task initiation coach for adults with ADHD, executive dysfunction, and time-blindness.
 Task: "${task.name}"
 Due: ${task.dueAt || 'Unspecified'} (${task.consequenceType || 'soft'} consequence)
 
-Your Persona & Directives:
-- Tone: Blunt, irreverent toward avoidance, warm toward person.
+MANDATORY PRINCIPLES (Section 20 Check-in Tone Safety Directive):
+1. TARGET THE TASK, NEVER THE PERSON:
+   - Bluntness targets the task or the avoidance behavior — never the person's character, effort, or worth.
+   - Ban all shaming, guilt, sarcasm, or personal judgments.
+
+2. BAN ON QUIT-FRAMING & ULTIMATUMS:
+   - Giving up, quitting, walking away, or disengaging must NEVER be presented as an option, in ANY framing, including as one side of a binary choice.
+   - NEVER use "either/or" ultimatums (e.g. NEVER say "Either do X or close the tab", "Either revise or quit").
+
+3. DISTINGUISH AVOIDANCE FROM FEAR/DISTRESS:
+   - Avoidance (procrastination, distraction, inertia, sluggish start): Give a firm push toward immediate physical action.
+   - Fear or anxiety about outcomes (fear of failing, panic, catastrophic thoughts): Give brief acknowledgment/validation first, then redirect to the smallest next physical action — never an ultimatum, never a skip straight to consequences.
+   - Example pair (illustrative only):
+     * BAD: "Either revise or close the tab."
+     * BETTER: "Failing tomorrow doesn't erase the studying you can still do tonight. What's the actual first page you'd open right now?"
+
+4. DEFAULT TO GENTLER RESPONSE UNDER UNCERTAINTY:
+   - When genuinely unsure whether the user's message reflects pure avoidance or fear/distress, ALWAYS default to the gentler (fear/distress) response: acknowledge the difficulty briefly, then ask for the 2-minute physical micro-step.
+
+STYLE & LENGTH:
 - Keep response short: 1-3 sentences maximum.
-- Ban all corporate SaaS cheerleading, generic motivational slogans, or condescending productivity advice.
-- Identify the exact paralysis obstacle (overwhelm, perfectionism, initiation friction, lack of clarity) and guide the user to a physical micro-step taking under 2 minutes.
-- Treat this as an authentic back-and-forth dialogue to unfreeze the user.`;
+- Ban all corporate SaaS cheerleading, generic motivational platitudes, exclamation marks, or condescending advice.
+- Point to a concrete physical micro-step taking under 2 minutes (e.g., opening a document, putting hands on a tool, writing one line).`;
 
   const prompt = `${historyLines ? `Previous Turns:\n${historyLines}\n\n` : ''}User: ${userMessage}\n\nLast Call:`;
 
+  // Attempt 1: Standard Generation
+  let candidate = '';
   try {
-    const coaching = await generateContentWithFallback(prompt, {
-      systemInstruction,
-      temperature: 0.3,
-      maxOutputTokens: 200,
-    });
-    return coaching.trim();
+    candidate = (
+      await generateContentWithFallback(prompt, {
+        systemInstruction: baseSystemInstruction,
+        temperature: 0.3,
+        maxOutputTokens: 200,
+      })
+    ).trim();
   } catch (err: any) {
-    console.warn('[Gemini Coaching] Fallback:', err?.message || err);
-    return `Pick the very first 2-minute physical micro-action for '${task.name}'. Put your hands on it, set a 2-minute timer, and ignore everything else.`;
+    console.warn('[Gemini Coaching] Attempt 1 generation failed:', err?.message || err);
+    return getFixedSafeCoachingFallback(task.name);
   }
+
+  // Validation Pass 1
+  const validation1 = await validateCheckInResponse(candidate, userMessage, task.name);
+  if (validation1.isSafe) {
+    return candidate;
+  }
+
+  console.warn(
+    `[Gemini Tone Safety] Attempt 1 flagged: ${validation1.violatedPrinciples.join(', ')}. Candidate: "${candidate}". Regenerating once with corrective instruction...`
+  );
+
+  // Attempt 2: Regenerate once with a corrective instruction naming the specific violated principles
+  const correctiveInstruction = `${baseSystemInstruction}
+
+CRITICAL CORRECTIVE INSTRUCTION:
+Your previous draft was FLAGGED and REJECTED for the following tone safety violation(s): ${validation1.violatedPrinciples.join(', ')}.
+You MUST correct this immediately:
+- Do NOT present giving up, quitting, or disengaging as an option in ANY way.
+- Do NOT issue ultimatums or binary either/or choices.
+- If the user expresses fear, anxiety, or overwhelm, validate briefly and ask for the single 2-minute physical start.
+- Focus strictly on the task, never the person's character.`;
+
+  try {
+    candidate = (
+      await generateContentWithFallback(prompt, {
+        systemInstruction: correctiveInstruction,
+        temperature: 0.1,
+        maxOutputTokens: 200,
+      })
+    ).trim();
+  } catch (err: any) {
+    console.warn('[Gemini Coaching] Attempt 2 generation failed:', err?.message || err);
+    return getFixedSafeCoachingFallback(task.name);
+  }
+
+  // Validation Pass 2
+  const validation2 = await validateCheckInResponse(candidate, userMessage, task.name);
+  if (validation2.isSafe) {
+    return candidate;
+  }
+
+  // Flagged a second time: Fall back to fixed, safe, generic supportive line
+  console.warn(
+    `[Gemini Tone Safety] Attempt 2 also flagged: ${validation2.violatedPrinciples.join(', ')}. Candidate: "${candidate}". Falling back to immutable safe supportive line.`
+  );
+  return getFixedSafeCoachingFallback(task.name);
 }
 
 export interface CheckInCompletionResult {
@@ -899,6 +1099,223 @@ Return valid JSON strictly matching the schema.`;
     return {
       summary: `Check-in on ${task.name} completed.`,
       nextPhysicalAction: 'Start 2-minute timer on initial step.',
+    };
+  }
+}
+
+/**
+ * Section 19: Crisis Language Safety Directive
+ * Fixed resource block — this exact text, not model-generated, ever.
+ */
+export const CRISIS_RESOURCE_BLOCK = `If you're going through something difficult right now, you don't have to handle it alone.
+
+India — Tele-MANAS (Govt. of India, 24/7, all languages):
+Call 14416 or 1800-891-4416
+
+United States — 988 Suicide & Crisis Lifeline (24/7):
+Call or text 988
+
+If you're outside these regions, please search for a local crisis line, or contact a local emergency number.`;
+
+/**
+ * Checks for crisis / self-harm / suicidal language.
+ * Coarse safety net, not a diagnostic tool.
+ */
+export function isCrisisLanguage(text: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  const normalized = text.toLowerCase().trim();
+
+  const crisisPatterns = [
+    /\bsuicid/i,
+    /\bkill myself\b/i,
+    /\bend my life\b/i,
+    /\bwant to die\b/i,
+    /\bdon'?t want to live\b/i,
+    /\bnot wanting to live\b/i,
+    /\bself[-\s]?harm/i,
+    /\bcutting myself\b/i,
+    /\bbetter off dead\b/i,
+    /\bhang myself\b/i,
+    /\boverdose\b/i,
+    /\bending it all\b/i,
+    /\bslit my wrist\b/i,
+    /\btake my own life\b/i,
+    /\btired of living\b/i,
+    /\bno reason to live\b/i,
+    /\bcan'?t go on living\b/i,
+    /\bwish i was dead\b/i,
+    /\bwish i were dead\b/i,
+  ];
+
+  return crisisPatterns.some((pattern) => pattern.test(normalized));
+}
+
+/**
+ * Embedding Model Fallback Ladder (Verified against official @google/genai SDK):
+ * 1. gemini-embedding-2-preview (Google's multimodal embedding model)
+ * 2. gemini-embedding-001 (Google's GA text-only embedding model; replacement for shut-down text-embedding-004)
+ * Note: text-embedding-004 was shut down by Google on January 14, 2026.
+ */
+const EMBEDDING_MODELS_LADDER = [
+  'gemini-embedding-2-preview',
+  'gemini-embedding-001',
+];
+
+export interface TextEmbeddingResult {
+  vector: number[] | null;
+  isRealSemanticEmbedding: boolean;
+  modelUsed?: string | null;
+}
+
+/**
+ * Computes text embedding using Gemini embedding models ladder:
+ * Primary: gemini-embedding-2-preview
+ * Second rung: gemini-embedding-001
+ * 
+ * If all real embedding models fail, returns isRealSemanticEmbedding: false and vector: null.
+ * Callers MUST skip retrieval entirely when isRealSemanticEmbedding is false to avoid
+ * presenting fabricated hash-based "connections" to past entries.
+ */
+export async function computeTextEmbedding(text: string): Promise<TextEmbeddingResult> {
+  const clean = (text || '').trim();
+  if (!clean) {
+    return { vector: null, isRealSemanticEmbedding: false, modelUsed: null };
+  }
+
+  for (const model of EMBEDDING_MODELS_LADDER) {
+    try {
+      const response = await ai.models.embedContent({
+        model,
+        contents: clean,
+      });
+      const values = response?.embeddings?.[0]?.values;
+      if (Array.isArray(values) && values.length > 0) {
+        return {
+          vector: values,
+          isRealSemanticEmbedding: true,
+          modelUsed: model,
+        };
+      }
+    } catch (err: any) {
+      console.warn(`[Gemini] embedContent with ${model} failed:`, err?.message || err);
+    }
+  }
+
+  // All real embedding models failed or were unreachable.
+  // Skip retrieval entirely to never fabricate a semantic connection.
+  console.warn(
+    '[Gemini] All real embedding models in fallback chain failed. Semantic retrieval will be skipped to prevent fabricating false connections.'
+  );
+  return {
+    vector: null,
+    isRealSemanticEmbedding: false,
+    modelUsed: null,
+  };
+}
+
+/**
+ * Computes cosine similarity between two numeric vectors.
+ */
+export function computeCosineSimilarity(vecA?: number[], vecB?: number[]): number {
+  if (!vecA || !vecB || vecA.length !== vecB.length || vecA.length === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  return Math.max(-1, Math.min(1, sim));
+}
+
+const SUPPORTIVE_REFLECTION_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    reflection: {
+      type: Type.STRING,
+      description: 'A 1 to 3 sentence supportive reflection observing patterns from history. Do not diagnose or predict anything.',
+    },
+    offerPartnerNote: {
+      type: Type.BOOLEAN,
+      description: 'True only if a recurring heavy pattern or persistent difficulty across multiple entries is observed.',
+    },
+    draftPartnerNote: {
+      type: Type.STRING,
+      nullable: true,
+      description: 'A short, gentle draft note to their partner if offerPartnerNote is true; null otherwise.',
+    },
+  },
+  required: ['reflection', 'offerPartnerNote'],
+};
+
+/**
+ * Section 17 & 18: Generates a supportive reflection incorporating similar past entries.
+ * Evaluates human-in-the-loop partner outreach draft if a recurring heavy pattern is observed.
+ */
+export async function generateJournalSupportiveReflection(
+  currentText: string,
+  similarPastEntries: Array<{ id: string; text: string; createdAt: string; similarity: number }>
+): Promise<{
+  reflection: string;
+  offerPartnerNote: boolean;
+  draftPartnerNote?: string | null;
+}> {
+  const pastContext = similarPastEntries
+    .map(
+      (e, idx) =>
+        `Past Entry ${idx + 1} (${new Date(e.createdAt).toLocaleDateString()}): "${e.text}" (similarity: ${(e.similarity * 100).toFixed(0)}%)`
+    )
+    .join('\n');
+
+  const systemInstruction = `You are a quiet, empathetic journal reflection assistant for "Last Call".
+Your goal is to provide a brief, grounded reflection (1-3 sentences) on the user's latest journal entry, drawing on their relevant past entries when applicable.
+
+MANDATORY RULES:
+1. Grounded Pattern Reflection: You reflect what the user has written. You may notice real patterns ("this is the third time this week you've mentioned feeling behind on paperwork", or "like yesterday, you noted wanting more uninterrupted focus").
+2. NEVER diagnose, predict, or assess mental health: Never use clinical or psychological labels (ADHD, executive dysfunction, depression, anxiety, burnout, pathology). Never say "you are struggling with X" or "this indicates that you will...".
+3. Tone: Warm, validating, and quiet when heavy, but practical and grounded. No saccharine cheerleading or generic SaaS motivational slogans.
+4. Human-in-the-Loop Partner Outreach:
+   - If and ONLY if you observe a recurring heavy pattern across past entries and today (e.g. repeated overwhelm, paralysis, exhaustion over multiple days/entries):
+     Set offerPartnerNote to true, and provide a short, gentle, non-alarmist draftPartnerNote (e.g., "Hey, I've been feeling pretty swamped with tasks the past few days and wanted to check in.").
+   - If this is an ordinary day, a single hard day without recurring history, a positive log, or not a recurring heavy pattern:
+     Set offerPartnerNote to false, and draftPartnerNote to null.
+   - Never alert or send anything automatically.
+
+Return valid JSON adhering strictly to the schema.`;
+
+  const prompt = `Current Entry:
+"${currentText}"
+
+Similar Past Entries from this user:
+${pastContext || 'No similar past entries available.'}
+`;
+
+  try {
+    const rawJson = await generateContentWithFallback(prompt, {
+      systemInstruction,
+      responseMimeType: 'application/json',
+      responseSchema: SUPPORTIVE_REFLECTION_SCHEMA,
+      temperature: 0.2,
+      maxOutputTokens: 300,
+    });
+
+    const parsed = JSON.parse(rawJson);
+    return {
+      reflection: parsed.reflection || 'Noted your entry and saved it to your log.',
+      offerPartnerNote: Boolean(parsed.offerPartnerNote),
+      draftPartnerNote: parsed.offerPartnerNote
+        ? parsed.draftPartnerNote || "Hey, just letting you know I've been feeling a bit overloaded lately."
+        : null,
+    };
+  } catch (err) {
+    console.warn('[Gemini] generateJournalSupportiveReflection fallback:', err);
+    return {
+      reflection: 'Saved your reflection to your personal journal history.',
+      offerPartnerNote: false,
+      draftPartnerNote: null,
     };
   }
 }

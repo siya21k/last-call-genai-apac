@@ -14,6 +14,8 @@ import {
   X,
   Trash2,
   UserCheck,
+  AlertTriangle,
+  Sparkles,
 } from 'lucide-react';
 import type { Task, JournalEntry, ConsequenceType } from '../types';
 import { MascotFlower, CompletionRewardIcon, getRandomRewardType, type RewardType } from './Mascot';
@@ -37,8 +39,9 @@ interface SidePanelProps {
     }
   ) => Promise<void>;
   journalEntries?: JournalEntry[];
-  onAddJournalEntry?: (text: string, title?: string, tags?: string[]) => Promise<void>;
+  onAddJournalEntry?: (text: string, title?: string, tags?: string[]) => Promise<any>;
   onDeleteJournalEntry?: (id: string) => Promise<void>;
+  onSendPartnerNote?: (text: string) => Promise<any>;
   onOpenSettings: () => void;
   onOpenPartner: () => void;
   isLoading: boolean;
@@ -58,6 +61,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   journalEntries = [],
   onAddJournalEntry,
   onDeleteJournalEntry,
+  onSendPartnerNote,
   onOpenSettings,
   onOpenPartner,
   isLoading,
@@ -98,10 +102,13 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   const [editTaskDueAt, setEditTaskDueAt] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
 
-  // Journal Form State
+  // Journal Form & Partner Outreach State
   const [newJournalText, setNewJournalText] = useState('');
   const [isSubmittingJournal, setIsSubmittingJournal] = useState(false);
   const [deletingJournalId, setDeletingJournalId] = useState<string | null>(null);
+  const [partnerNoteDraft, setPartnerNoteDraft] = useState<string | null>(null);
+  const [isSendingPartnerNote, setIsSendingPartnerNote] = useState(false);
+  const [partnerNoteSentSuccess, setPartnerNoteSentSuccess] = useState(false);
 
   const pendingTasks = tasks.filter((t) => t.status === 'pending');
   const completedTasks = tasks.filter((t) => t.status === 'met' || t.status === 'released');
@@ -212,10 +219,30 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
     try {
       setIsSubmittingJournal(true);
-      await onAddJournalEntry(newJournalText.trim());
+      setPartnerNoteSentSuccess(false);
+      const res = await onAddJournalEntry(newJournalText.trim());
       setNewJournalText('');
+      if (res?.offerPartnerNote && res?.draftPartnerNote) {
+        setPartnerNoteDraft(res.draftPartnerNote);
+      } else {
+        setPartnerNoteDraft(null);
+      }
     } finally {
       setIsSubmittingJournal(false);
+    }
+  };
+
+  const handleSendPartnerDraft = async () => {
+    if (!partnerNoteDraft?.trim() || !onSendPartnerNote || isSendingPartnerNote) return;
+    try {
+      setIsSendingPartnerNote(true);
+      await onSendPartnerNote(partnerNoteDraft.trim());
+      setPartnerNoteSentSuccess(true);
+      setPartnerNoteDraft(null);
+    } catch (err) {
+      console.error('Failed to send partner note:', err);
+    } finally {
+      setIsSendingPartnerNote(false);
     }
   };
 
@@ -661,6 +688,65 @@ export const SidePanel: React.FC<SidePanelProps> = ({
       ) : (
         /* Journal Section */
         <div className="flex-1 flex flex-col overflow-hidden bg-white select-text">
+          {/* Partner Note Draft Prompt (Human-in-the-Loop Partner Outreach) */}
+          {partnerNoteDraft && (
+            <div className="mb-2 p-2.5 bg-[#eefaf6] border-2 border-[#52b7aa] rounded-xl space-y-2 text-xs shadow-[2px_2px_0px_#2d2825] animate-in fade-in duration-200">
+              <div className="flex items-center gap-1.5 font-extrabold text-[#1a5349]">
+                <UserCheck className="w-4 h-4 text-[#52b7aa] stroke-[2.5]" />
+                <span>Share Update with Accountability Partner?</span>
+              </div>
+              <p className="text-[11px] text-[#23685c] leading-relaxed">
+                A recurring pattern of difficulty was noticed in your recent observations. You can review and choose whether to send this note to your partner:
+              </p>
+              <textarea
+                rows={3}
+                value={partnerNoteDraft}
+                onChange={(e) => setPartnerNoteDraft(e.target.value)}
+                className="retro-input w-full p-2 text-xs text-[#2d2825] bg-white resize-none"
+              />
+              <div className="flex items-center justify-end gap-2 select-none pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPartnerNoteDraft(null)}
+                  disabled={isSendingPartnerNote}
+                  className="retro-btn px-2.5 py-1 text-[11px] font-bold bg-white text-stone-700"
+                >
+                  Dismiss
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendPartnerDraft}
+                  disabled={isSendingPartnerNote || !partnerNoteDraft.trim()}
+                  className="retro-btn-primary px-3 py-1 text-[11px] font-bold flex items-center gap-1.5"
+                >
+                  {isSendingPartnerNote ? (
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Check className="w-3 h-3 stroke-[3]" />
+                  )}
+                  <span>Send to Partner</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Partner Note Sent Confirmation */}
+          {partnerNoteSentSuccess && (
+            <div className="mb-2 p-2 bg-[#eefaf6] border-2 border-[#52b7aa] rounded-xl text-xs font-bold text-[#1a5349] flex items-center justify-between shadow-[2px_2px_0px_#2d2825]">
+              <div className="flex items-center gap-1.5">
+                <Check className="w-3.5 h-3.5 text-[#52b7aa] stroke-[3]" />
+                <span>Note sent to your accountability partner.</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPartnerNoteSentSuccess(false)}
+                className="text-stone-400 hover:text-stone-700 p-0.5"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
           {/* New Journal Entry Input */}
           <form onSubmit={handleCreateJournal} className="p-2.5 retro-sunken mb-2 text-xs space-y-2 bg-[#faf4e8]">
             <div className="font-bold text-[#2d2825] flex items-center gap-1.5">
@@ -691,7 +777,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
           </form>
 
           {/* Journal Entries List */}
-          <div className="retro-sunken flex-1 p-2.5 overflow-y-auto space-y-2 bg-[#fdfaf4]">
+          <div className="retro-sunken flex-1 p-2.5 overflow-y-auto space-y-2.5 bg-[#fdfaf4]">
             {journalEntries.length === 0 ? (
               <div className="h-56 flex flex-col items-center justify-center text-center p-4">
                 <MascotFlower
@@ -704,7 +790,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({
               journalEntries.map((entry) => (
                 <div
                   key={entry.id}
-                  className="border-2 border-[#2d2825] rounded-xl p-2.5 bg-white shadow-[2px_2px_0px_#2d2825] space-y-1 text-xs"
+                  className="border-2 border-[#2d2825] rounded-xl p-2.5 bg-white shadow-[2px_2px_0px_#2d2825] space-y-2 text-xs"
                 >
                   <div className="flex items-center justify-between text-[10px] font-mono text-stone-500 border-b border-stone-200 pb-1">
                     <span className="flex items-center gap-1">
@@ -728,6 +814,37 @@ export const SidePanel: React.FC<SidePanelProps> = ({
                     )}
                   </div>
                   <p className="text-stone-900 leading-relaxed whitespace-pre-wrap font-medium">{entry.text}</p>
+
+                  {/* Crisis Language Static Safety Block (Section 19) */}
+                  {entry.isCrisis && (
+                    <div className="mt-2 p-2.5 bg-[#fff0ed] border-2 border-rose-500 rounded-xl space-y-1.5 text-xs">
+                      <div className="flex items-center gap-1.5 font-bold text-rose-950 text-[11px]">
+                        <AlertTriangle className="w-3.5 h-3.5 text-rose-600 stroke-[2.5]" />
+                        <span>Support & Crisis Resources</span>
+                      </div>
+                      <div className="text-[11px] text-stone-800 whitespace-pre-wrap font-sans leading-relaxed bg-white/90 p-2 rounded-lg border border-rose-200">
+                        {entry.reflection}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Supportive Reflection (Section 17) */}
+                  {entry.reflection && !entry.isCrisis && (
+                    <div className="mt-2 p-2.5 bg-[#faf6ee] border border-[#e5dcce] rounded-lg space-y-1">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#5c4a33]">
+                        <Sparkles className="w-3 h-3 text-[#f5b638] stroke-[2.5]" />
+                        <span>Supportive Reflection</span>
+                        {entry.similarEntryIds && entry.similarEntryIds.length > 0 && (
+                          <span className="text-[10px] font-normal text-stone-500 ml-auto font-mono">
+                            {entry.similarEntryIds.length} connected past notes
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-stone-800 leading-relaxed font-normal">
+                        {entry.reflection}
+                      </p>
+                    </div>
+                  )}
                 </div>
               ))
             )}

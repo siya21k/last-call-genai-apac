@@ -37,6 +37,8 @@ import {
   setOwnerPresence,
   getOwnerPresence,
   resolveUserDisplayName,
+  savePartnerNote,
+  getPartnerNote,
 } from './server/db';
 import {
   classifyAndExtractMessage,
@@ -45,6 +47,11 @@ import {
   extractCheckInCompletion,
   hasDegenerateRepetition,
   getZonedParts,
+  CRISIS_RESOURCE_BLOCK,
+  isCrisisLanguage,
+  computeTextEmbedding,
+  computeCosineSimilarity,
+  generateJournalSupportiveReflection,
 } from './server/gemini';
 import type { DailyStrip, DailyStripItem } from './src/types';
 
@@ -456,7 +463,7 @@ app.get('/api/journal', authenticate, async (req: AuthRequest, res: Response) =>
   }
 });
 
-// POST /api/journal: Create journal entry
+// POST /api/journal: Create journal entry with embedding, cosine retrieval, and supportive reflection
 app.post('/api/journal', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user!.uid;
@@ -464,15 +471,135 @@ app.post('/api/journal', authenticate, async (req: AuthRequest, res: Response) =
     if (!text || typeof text !== 'string' || !text.trim()) {
       return res.status(400).json({ error: 'Entry text is required.' });
     }
+
+    const trimmedText = text.trim();
+    const cleanTitle = title ? String(title).trim() : null;
+    const cleanTags = Array.isArray(tags) ? tags : [];
+
+    // Section 19: Crisis Language Safety Directive
+    // Fixed static resource block; never model-generated; suppress reflection and partner note.
+    if (isCrisisLanguage(trimmedText)) {
+      const entry = await createJournalEntry(uid, {
+        text: trimmedText,
+        title: cleanTitle,
+        tags: cleanTags,
+        isCrisis: true,
+        reflection: CRISIS_RESOURCE_BLOCK,
+      });
+
+      return res.json({
+        entry,
+        isCrisis: true,
+        reflection: CRISIS_RESOURCE_BLOCK,
+        offerPartnerNote: false,
+        draftPartnerNote: null,
+        similarEntries: [],
+      });
+    }
+
+    // Section 17: Journal Retrieval & Supportive Reflection
+    // 1. Compute text embedding for the new entry using the verified fallback ladder
+    // (gemini-embedding-2-preview -> gemini-embedding-001)
+    const embeddingResult = await computeTextEmbedding(trimmedText);
+
+    let topSimilar: Array<{ id: string; text: string; createdAt: string; similarity: number }> = [];
+
+    // 2. Only perform semantic retrieval if a REAL embedding was obtained.
+    // If all real embedding calls fail, skip retrieval entirely and generate a supportive
+    // reflection based only on the current entry — never present a hash-based "connection".
+    if (embeddingResult.isRealSemanticEmbedding && embeddingResult.vector) {
+      const pastEntries = await getJournalEntries(uid);
+
+      const pastWithSim: Array<{ id: string; text: string; createdAt: string; similarity: number }> = [];
+
+      for (const past of pastEntries) {
+        let pastVec = past.embedding;
+        if (!Array.isArray(pastVec) || pastVec.length === 0) {
+          const pastEmbResult = await computeTextEmbedding(past.text);
+          if (pastEmbResult.isRealSemanticEmbedding && pastEmbResult.vector) {
+            pastVec = pastEmbResult.vector;
+          }
+        }
+
+        if (Array.isArray(pastVec) && pastVec.length === embeddingResult.vector.length) {
+          const sim = computeCosineSimilarity(embeddingResult.vector, pastVec);
+          if (sim > 0.05) {
+            pastWithSim.push({
+              id: past.id,
+              text: past.text,
+              createdAt: past.createdAt,
+              similarity: sim,
+            });
+          }
+        }
+      }
+
+      pastWithSim.sort((a, b) => b.similarity - a.similarity);
+      topSimilar = pastWithSim.slice(0, 3);
+    } else {
+      console.info(
+        '[Journal] Real embedding calls failed or unavailable. Skipping retrieval entirely; generating supportive reflection based strictly on current entry.'
+      );
+    }
+
+    // 3. Generate supportive reflection with pattern observation & human-in-the-loop partner outreach.
+    // When retrieval is skipped, topSimilar is empty, so reflection is generated solely from current entry.
+    const { reflection, offerPartnerNote, draftPartnerNote } =
+      await generateJournalSupportiveReflection(trimmedText, topSimilar);
+
+    // 4. Persist entry with real embedding (or undefined if real embedding calls failed)
     const entry = await createJournalEntry(uid, {
-      text: text.trim(),
-      title: title ? String(title).trim() : undefined,
-      tags: Array.isArray(tags) ? tags : [],
+      text: trimmedText,
+      title: cleanTitle,
+      tags: cleanTags,
+      embedding: embeddingResult.isRealSemanticEmbedding && embeddingResult.vector ? embeddingResult.vector : undefined,
+      reflection,
+      isCrisis: false,
+      similarEntryIds: topSimilar.map((s) => s.id),
     });
-    res.json({ entry });
+
+    res.json({
+      entry,
+      isCrisis: false,
+      reflection,
+      offerPartnerNote,
+      draftPartnerNote,
+      similarEntries: topSimilar.map((s) => ({
+        id: s.id,
+        text: s.text,
+        createdAt: s.createdAt,
+        similarity: s.similarity,
+      })),
+    });
   } catch (err: any) {
     console.error('[API] Error in POST /api/journal:', err);
     res.status(500).json({ error: err.message || 'Failed to save journal entry.' });
+  }
+});
+
+// POST /api/partner/note: Human-in-the-Loop Partner Outreach
+// Owner explicitly reviews and sends a note to their partner (saved on owner's users/{uid} document)
+app.post('/api/partner/note', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const { text } = req.body || {};
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'Note text is required.' });
+    }
+
+    const savedNote = await savePartnerNote(uid, {
+      text: text.trim(),
+      sentAt: new Date().toISOString(),
+    });
+
+    res.json({
+      success: true,
+      partnerNote: savedNote,
+      message: 'Note sent to your accountability partner.',
+    });
+  } catch (err: any) {
+    console.error('[API] Error in POST /api/partner/note:', err);
+    res.status(500).json({ error: err.message || 'Failed to send partner note.' });
   }
 });
 
@@ -1293,10 +1420,11 @@ app.get('/api/partner/status', authenticate, async (req: AuthRequest, res: Respo
       });
     }
 
-    const [tasks, strips, ownerDisplayName] = await Promise.all([
+    const [tasks, strips, ownerDisplayName, partnerNote] = await Promise.all([
       getTasks(callerOwnerUid),
       getDailyStrips(callerOwnerUid),
       resolveUserDisplayName(callerOwnerUid),
+      getPartnerNote(callerOwnerUid),
     ]);
     const now = Date.now();
     const escalationWindowMs = 48 * 3600 * 1000;
@@ -1315,6 +1443,8 @@ app.get('/api/partner/status', authenticate, async (req: AuthRequest, res: Respo
       hasHardConsequenceInEscalationWindow,
       ownerName: ownerDisplayName,
       ownerUid: callerOwnerUid,
+      latestNote: partnerNote?.text || null,
+      latestNoteAt: partnerNote?.sentAt || null,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to compute partner status.' });
@@ -1329,7 +1459,7 @@ async function start() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+        hmr: false,
       },
       appType: 'spa',
     });
