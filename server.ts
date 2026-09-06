@@ -27,6 +27,8 @@ import {
   getJournalEntries,
   createJournalEntry,
   deleteJournalEntry,
+  setOwnerPresence,
+  getOwnerPresence,
 } from './server/db';
 import {
   classifyAndExtractMessage,
@@ -535,6 +537,9 @@ app.post('/api/tasks/:id/checkin', authenticate, async (req: AuthRequest, res: R
       messageType: 'checkin-prompt',
     });
 
+    // Realtime Presence: check-in started
+    await setOwnerPresence(uid, true);
+
     res.json({ userMessage: userMsg, systemMessage: systemMsg, task });
   } catch (err: any) {
     console.error('[API] Error in POST /api/tasks/:id/checkin:', err);
@@ -577,10 +582,35 @@ app.post('/api/tasks/:id/checkin/complete', authenticate, async (req: AuthReques
       messageType: 'normal',
     });
 
+    // Realtime Presence: check-in completed
+    await setOwnerPresence(uid, false);
+
     res.json({ entry, systemMessage: systemMsg, task });
   } catch (err: any) {
     console.error('[API] Error in POST /api/tasks/:id/checkin/complete:', err);
     res.status(500).json({ error: err.message || 'Failed to complete check-in.' });
+  }
+});
+
+// POST /api/tasks/:id/checkin/exit: Explicit exit / abandonment of check-in
+app.post('/api/tasks/:id/checkin/exit', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    await setOwnerPresence(uid, false);
+    res.json({ success: true, isCheckingIn: false });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to exit check-in.' });
+  }
+});
+
+// POST /api/presence/exit: General check-in exit / cancel
+app.post('/api/presence/exit', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    await setOwnerPresence(uid, false);
+    res.json({ success: true, isCheckingIn: false });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to exit check-in.' });
   }
 });
 
@@ -783,6 +813,9 @@ app.post('/api/thread/message', authenticate, async (req: AuthRequest, res: Resp
       }
     } else if (classification.intent === 'check-in') {
       // Stage 3 Task Initiation / Multi-turn Check-In Flow
+      // Realtime Presence: Start check-in or refresh heartbeat
+      await setOwnerPresence(uid, true);
+
       const checkIn = classification.checkIn || {
         targetTaskId: null,
         userIntent: trimmed,
@@ -822,12 +855,37 @@ app.post('/api/thread/message', authenticate, async (req: AuthRequest, res: Resp
         messageType: 'checkin-prompt',
       });
     } else if (classification.intent === 'conversation') {
-      const reply = classification.conversationalReply || 'Message received. What are we starting on right now?';
-      systemMsgRecord = await addThreadMessage(uid, {
-        role: 'system',
-        text: reply,
-        messageType: 'normal',
-      });
+      // Check if user is currently in an active check-in session to handle heartbeat or explicit exit
+      const activePresence = await getOwnerPresence(uid);
+      const lower = trimmed.toLowerCase();
+      const isExitIntent =
+        lower === 'exit' ||
+        lower === 'cancel' ||
+        lower === 'stop' ||
+        lower === 'abandon' ||
+        lower === 'exit check-in' ||
+        lower === 'cancel check-in' ||
+        lower === 'stop check-in';
+
+      if (activePresence?.isCheckingIn && isExitIntent) {
+        await setOwnerPresence(uid, false);
+        systemMsgRecord = await addThreadMessage(uid, {
+          role: 'system',
+          text: 'Exited check-in. Realtime focus presence reset to idle.',
+          messageType: 'normal',
+        });
+      } else {
+        if (activePresence?.isCheckingIn) {
+          // Heartbeat refresh on subsequent message exchange within active check-in
+          await setOwnerPresence(uid, true);
+        }
+        const reply = classification.conversationalReply || 'Message received. What are we starting on right now?';
+        systemMsgRecord = await addThreadMessage(uid, {
+          role: 'system',
+          text: reply,
+          messageType: 'normal',
+        });
+      }
     } else {
       systemMsgRecord = await addThreadMessage(uid, {
         role: 'system',

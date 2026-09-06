@@ -92,6 +92,19 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "status", "createdAt"]
+    },
+    "JournalEntry": {
+      "title": "JournalEntry",
+      "description": "User journal reflection entry.",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "title": { "type": "string" },
+        "link": { "type": "string" },
+        "tags": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "createdAt"]
     }
   },
   "firestore": {
@@ -118,6 +131,10 @@
     "/users/{userId}/threadMessages/{messageId}": {
       "schema": "ThreadMessage",
       "description": "Persistent instant-messenger chat thread messages."
+    },
+    "/users/{userId}/journalEntries/{journalEntryId}": {
+      "schema": "JournalEntry",
+      "description": "User journal entries and notes."
     },
     "/users/{userId}/partnerInvite/{inviteDoc}": {
       "schema": "PartnerInvite",

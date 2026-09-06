@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { initializeApp, getApps, getApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import type {
   Task,
@@ -15,6 +15,7 @@ import type {
   AnchorTimes,
   UserProfile,
   JournalEntry,
+  PresenceState,
 } from '../src/types';
 
 // Load Firebase applet configuration
@@ -54,6 +55,7 @@ interface MemoryStore {
   dailyStrip: Record<string, Record<string, string>>; // key: `${uid}` -> { [date]: line }
   invites: Record<string, PartnerInvite>; // key: `${uid}`
   journalEntries: Record<string, JournalEntry[]>; // key: `${uid}`
+  presence?: Record<string, { isCheckingIn: boolean; updatedAt: string }>; // key: `${uid}`
 }
 
 function loadLocalStore(): MemoryStore {
@@ -69,12 +71,13 @@ function loadLocalStore(): MemoryStore {
         dailyStrip: parsed.dailyStrip || {},
         invites: parsed.invites || {},
         journalEntries: parsed.journalEntries || {},
+        presence: parsed.presence || {},
       };
     }
   } catch (e) {
     console.warn('[DB] Error loading local store:', e);
   }
-  return { users: {}, tasks: {}, taskEntries: {}, threadMessages: {}, logEntries: {}, dailyStrip: {}, invites: {}, journalEntries: {} };
+  return { users: {}, tasks: {}, taskEntries: {}, threadMessages: {}, logEntries: {}, dailyStrip: {}, invites: {}, journalEntries: {}, presence: {} };
 }
 
 function saveLocalStore(store: MemoryStore) {
@@ -773,4 +776,59 @@ export async function deleteJournalEntry(uid: string, entryId: string): Promise<
     store.journalEntries[uid] = store.journalEntries[uid].filter((e) => e.id !== entryId);
     saveLocalStore(store);
   }
+}
+
+/**
+ * Realtime Presence Helpers: /users/{uid}/presence/current
+ * Writes { isCheckingIn, updatedAt: serverTimestamp() }
+ */
+export async function setOwnerPresence(
+  uid: string,
+  isCheckingIn: boolean
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  try {
+    await adminDb
+      .collection('users')
+      .doc(uid)
+      .collection('presence')
+      .doc('current')
+      .set(
+        {
+          isCheckingIn,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+  } catch (err: any) {
+    console.warn('[DB] Error writing presence to Firestore:', err.message);
+  }
+
+  const store = loadLocalStore();
+  if (!store.presence) store.presence = {};
+  store.presence[uid] = {
+    isCheckingIn,
+    updatedAt: nowIso,
+  };
+  saveLocalStore(store);
+}
+
+export async function getOwnerPresence(
+  uid: string
+): Promise<{ isCheckingIn: boolean; updatedAt: any } | null> {
+  try {
+    const docSnap = await adminDb
+      .collection('users')
+      .doc(uid)
+      .collection('presence')
+      .doc('current')
+      .get();
+    if (docSnap.exists) {
+      return docSnap.data() as { isCheckingIn: boolean; updatedAt: any };
+    }
+  } catch (err: any) {
+    console.warn('[DB] Fallback getOwnerPresence:', err.message);
+  }
+  const store = loadLocalStore();
+  return store.presence?.[uid] || null;
 }

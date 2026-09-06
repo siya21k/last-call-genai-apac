@@ -9,6 +9,10 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid;
     }
 
+    function isPartnerOf(uid) {
+      return request.auth != null && request.auth.token.role == 'partner' && request.auth.token.ownerUid == uid;
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow write: if false;
@@ -40,6 +44,11 @@ service cloud.firestore {
 
       match /journalEntries/{journalEntryId} {
         allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /presence/current {
+        allow read: if isOwner(userId) || isPartnerOf(userId);
         allow write: if false;
       }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Header } from './components/Header';
 import { RetroChatThread } from './components/RetroChatThread';
 import { SidePanel } from './components/SidePanel';
@@ -6,7 +6,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { PartnerModal } from './components/PartnerModal';
 import { DailyStripHeader } from './components/DailyStripHeader';
 import { MascotFlower, DecorativeSparkle } from './components/Mascot';
-import { auth, loginWithGoogle, logout, onAuthStateChanged, testConnection } from './lib/firebase';
+import { auth, loginWithGoogle, logout, onAuthStateChanged, testConnection, onSnapshot, doc, db } from './lib/firebase';
 import type {
   Task,
   ThreadMessage,
@@ -16,6 +16,7 @@ import type {
   DailyStrip,
   JournalEntry,
   ConsequenceType,
+  PresenceState,
 } from './types';
 import { Clock, ShieldCheck, UserCheck, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 
@@ -48,6 +49,8 @@ export function App() {
   const isPartner = user?.role === 'partner' && !!user?.ownerUid;
   const [partnerStatus, setPartnerStatus] = useState<PartnerStatusView | null>(null);
   const [loadingPartnerStatus, setLoadingPartnerStatus] = useState(false);
+  const [presence, setPresence] = useState<PresenceState | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
 
   // Listen to Firebase Auth state
   useEffect(() => {
@@ -143,6 +146,54 @@ export function App() {
       loadThreadData();
     }
   }, [token, loadThreadData]);
+
+  // Realtime Presence listener for Partner: subscribes directly to /users/{ownerUid}/presence/current
+  useEffect(() => {
+    if (!isPartner || !user?.ownerUid) return;
+
+    const presenceDocRef = doc(db, 'users', user.ownerUid, 'presence', 'current');
+    const unsubscribe = onSnapshot(
+      presenceDocRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          setPresence(snapshot.data() as PresenceState);
+        } else {
+          setPresence({ isCheckingIn: false, updatedAt: null });
+        }
+      },
+      (err) => {
+        console.warn('[Partner] Realtime presence subscription error:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [isPartner, user?.ownerUid]);
+
+  // Regular tick to recompute client-side staleness (10-minute timeout guard)
+  useEffect(() => {
+    if (!isPartner) return;
+    const interval = setInterval(() => setNowMs(Date.now()), 15000);
+    return () => clearInterval(interval);
+  }, [isPartner]);
+
+  // Client-Side Staleness Guard:
+  // "Display 'currently checking in' ONLY when isCheckingIn === true AND (now - updatedAt) is less than 10 minutes."
+  const isLiveCheckingIn = useMemo(() => {
+    if (!presence || !presence.isCheckingIn) return false;
+    let updatedMs = 0;
+    if (presence.updatedAt?.toMillis) {
+      updatedMs = presence.updatedAt.toMillis();
+    } else if (presence.updatedAt?.seconds) {
+      updatedMs = presence.updatedAt.seconds * 1000;
+    } else if (typeof presence.updatedAt === 'string') {
+      updatedMs = new Date(presence.updatedAt).getTime();
+    } else if (presence.updatedAt instanceof Date) {
+      updatedMs = presence.updatedAt.getTime();
+    }
+    if (!updatedMs || isNaN(updatedMs)) return false;
+    const TEN_MINUTES_MS = 10 * 60 * 1000;
+    return nowMs - updatedMs < TEN_MINUTES_MS;
+  }, [presence, nowMs]);
 
   // Mood Tap: optionally flavor today's daily strip summary
   const handleMoodTap = async (date: string, mood: string | null) => {
@@ -606,6 +657,47 @@ export function App() {
               </div>
 
               <div>
+                <span className="font-bold text-[11px] uppercase tracking-wider text-stone-600 flex items-center justify-between">
+                  <span>Live Focus Presence</span>
+                  <span className="text-[9px] font-mono text-stone-500 font-normal">Realtime Listener</span>
+                </span>
+                <div className="mt-1.5">
+                  {isLiveCheckingIn ? (
+                    <div className="flex items-center justify-between p-3 rounded-xl border-2 border-[#2d2825] bg-[#e6f4f1] text-[#1e584f] text-xs font-bold shadow-[2px_2px_0px_#2d2825]">
+                      <div className="flex items-center gap-2.5">
+                        <span className="relative flex h-3 w-3">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#52b7aa] opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-3 w-3 bg-[#1e584f]"></span>
+                        </span>
+                        <div>
+                          <div className="leading-none font-extrabold text-[#17463f]">Currently Mid Check-In (Live)</div>
+                          <div className="text-[10px] font-normal text-[#2b7267] mt-0.5">Focus heartbeat active on owner thread</div>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono bg-white/70 px-2 py-0.5 rounded border border-[#52b7aa] text-[#1e584f]">
+                        Active
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between p-3 rounded-xl border-2 border-[#2d2825] bg-[#f8f6f2] text-stone-600 text-xs font-medium shadow-[2px_2px_0px_#2d2825]">
+                      <div className="flex items-center gap-2.5">
+                        <span className="h-2.5 w-2.5 rounded-full bg-stone-400 inline-block" />
+                        <div>
+                          <div className="font-bold text-stone-700 leading-none">Not actively checking in</div>
+                          <div className="text-[10px] text-stone-500 mt-0.5">
+                            {presence?.isCheckingIn
+                              ? 'Previous session timed out (>10m idle guard applied)'
+                              : 'Idle / Standby mode'}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-mono text-stone-400">Idle</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
                 <span className="font-bold text-[11px] uppercase tracking-wider text-stone-600">
                   Daily Strip Summary
                 </span>
@@ -640,9 +732,9 @@ export function App() {
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-stone-200 text-[10px] text-stone-500 flex items-center justify-between font-mono">
-                <span>Access: Verified Backend Route</span>
-                <span>Direct Reads: Denied</span>
+              <div className="pt-3 border-t border-stone-200 text-[10px] text-stone-500 flex flex-col sm:flex-row sm:items-center sm:justify-between font-mono gap-1">
+                <span>Access: Verified Backend Route + Scoped Realtime Listener</span>
+                <span>Direct Reads: Denied (Except /presence/current)</span>
               </div>
             </div>
           </div>

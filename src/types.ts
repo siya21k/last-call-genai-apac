@@ -128,3 +128,8 @@ export interface TaskCreationSignals {
   consequenceType: ConsequenceType;
   systemConfirmation?: string;
 }
+
+export interface PresenceState {
+  isCheckingIn: boolean;
+  updatedAt?: any;
+}
