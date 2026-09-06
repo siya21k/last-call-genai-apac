@@ -683,7 +683,7 @@ export async function revokePartner(uid: string): Promise<{ success: boolean }> 
       .doc(uid)
       .collection('partnerInvite')
       .doc('current')
-      .update({ status: 'revoked', partnerUid: null });
+      .set({ status: 'revoked', partnerUid: null, updatedAt: new Date().toISOString() }, { merge: true });
   } catch (err: any) {
     console.warn('[DB] Fallback revokePartner:', err.message);
   }

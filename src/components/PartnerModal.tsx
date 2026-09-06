@@ -81,7 +81,10 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
 
   useEffect(() => {
     if (isOpen) {
+      setConfirmRevoke(false);
       fetchInvite();
+    } else {
+      setConfirmRevoke(false);
     }
   }, [ownerUid, isOpen, fetchInvite]);
 
@@ -132,9 +135,9 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
     }
   };
 
-  const handleRevokePartner = async () => {
-    if (!confirm('Revoke partner access? They will immediately lose access to your status summary.')) return;
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
 
+  const handleRevokePartner = async () => {
     try {
       setSaving(true);
       setErrorMsg(null);
@@ -148,6 +151,7 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
       });
 
       if (res.ok) {
+        setConfirmRevoke(false);
         await fetchInvite();
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -155,7 +159,8 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
       }
     } catch (e: any) {
       console.error('Error revoking partner:', e);
-      setErrorMsg(e.message || 'Error revoking partner.');
+      const isNetError = e?.message === 'Failed to fetch' || e?.message?.includes('Network');
+      setErrorMsg(isNetError ? 'Network error revoking partner. Please retry.' : (e.message || 'Error revoking partner.'));
     } finally {
       setSaving(false);
     }
@@ -254,15 +259,37 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
 
               <div className="font-bold text-stone-900 text-sm">{invite.email}</div>
 
-              <div className="pt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleRevokePartner}
-                  disabled={saving}
-                  className="retro-btn px-3 py-1 text-xs text-rose-700 font-bold bg-[#fffdf9]"
-                >
-                  Revoke Access
-                </button>
+              <div className="pt-2 flex justify-end gap-2 items-center">
+                {confirmRevoke ? (
+                  <div className="flex items-center gap-2 bg-[#ffe8e5] p-1.5 rounded-lg border border-rose-300">
+                    <span className="text-[11px] font-bold text-rose-950">Revoke access?</span>
+                    <button
+                      type="button"
+                      onClick={handleRevokePartner}
+                      disabled={saving}
+                      className="retro-btn px-2.5 py-0.5 text-xs text-rose-800 font-extrabold bg-white"
+                    >
+                      {saving ? 'Revoking...' : 'Yes, Revoke'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmRevoke(false)}
+                      disabled={saving}
+                      className="retro-btn px-2 py-0.5 text-xs font-bold bg-[#fffdf9]"
+                    >
+                      Back
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmRevoke(true)}
+                    disabled={saving}
+                    className="retro-btn px-3 py-1 text-xs text-rose-700 font-bold bg-[#fffdf9]"
+                  >
+                    Revoke Access
+                  </button>
+                )}
               </div>
             </div>
           ) : invite && invite.status === 'pending' ? (
@@ -297,15 +324,37 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
                 </div>
               </div>
 
-              <div className="pt-1 flex justify-end">
-                <button
-                  type="button"
-                  onClick={handleRevokePartner}
-                  disabled={saving}
-                  className="retro-btn px-3 py-1 text-xs font-bold"
-                >
-                  Cancel Invite
-                </button>
+              <div className="pt-1 flex justify-end gap-2 items-center">
+                {confirmRevoke ? (
+                  <div className="flex items-center gap-2 bg-[#fff2e8] p-1.5 rounded-lg border border-amber-300">
+                    <span className="text-[11px] font-bold text-amber-950">Cancel this pending invite?</span>
+                    <button
+                      type="button"
+                      onClick={handleRevokePartner}
+                      disabled={saving}
+                      className="retro-btn px-2.5 py-0.5 text-xs text-rose-800 font-extrabold bg-white"
+                    >
+                      {saving ? 'Cancelling...' : 'Yes, Cancel'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmRevoke(false)}
+                      disabled={saving}
+                      className="retro-btn px-2 py-0.5 text-xs font-bold bg-[#fffdf9]"
+                    >
+                      Back
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmRevoke(true)}
+                    disabled={saving}
+                    className="retro-btn px-3 py-1 text-xs font-bold text-rose-700 bg-[#fffdf9]"
+                  >
+                    Cancel Invite
+                  </button>
+                )}
               </div>
             </div>
           ) : (
