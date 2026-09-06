@@ -760,9 +760,13 @@ function buildDeterministicFallback(
 export async function generateDailyStripSummary(
   dateStr: string,
   logEntries: string[],
-  completedTaskNames: string[]
+  completedTaskNames: string[],
+  mood?: string | null
 ): Promise<string> {
   if (logEntries.length === 0 && completedTaskNames.length === 0) {
+    if (mood) {
+      return `Quiet day (${mood}).`;
+    }
     return '';
   }
 
@@ -772,8 +776,9 @@ ${logEntries.map((l) => `- ${l}`).join('\n') || '(None)'}
 
 Tasks completed today:
 ${completedTaskNames.map((t) => `- ${t}`).join('\n') || '(None)'}
+${mood ? `User mood context today: ${mood} (Subtly color the phrasing/tone of the description with this vibe — e.g. low energy, steady rhythm, or sluggish start — without rating the mood, using exclamation marks, or adding motivational slogans)` : ''}
 
-Task: Write a single, concise, purely descriptive one-line summary phrase for this day (e.g., "quiet Tuesday," "mostly the vet thing," "tackled quarterly taxes and laundry").
+Task: Write a single, concise, purely descriptive one-line summary phrase for this day (e.g., "quiet Tuesday," "mostly the vet thing," "slowly worked through quarterly taxes").
 Rules:
 - Max 10-12 words.
 - Descriptive and grounded only in the facts above.

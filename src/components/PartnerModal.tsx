@@ -1,17 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
-  X,
-  Shield,
-  UserCheck,
-  UserX,
-  Copy,
-  Check,
-  AlertCircle,
-  Terminal,
-  Clock,
-  Send,
-  Eye,
-} from 'lucide-react';
+import { Shield, Copy, Check, Eye } from 'lucide-react';
 import type { PartnerInvite } from '../types';
 
 interface PartnerModalProps {
@@ -62,9 +50,9 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  const handleCreateInvite = async (e: React.FormEvent) => {
+  const handleSaveInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!emailInput.trim() || !emailInput.includes('@')) return;
+    if (!emailInput.trim() || saving) return;
 
     try {
       setSaving(true);
@@ -74,19 +62,15 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ email: emailInput.trim() }),
+        body: JSON.stringify({ partnerEmail: emailInput.trim() }),
       });
 
       if (res.ok) {
-        const data = await res.json();
-        setInvite(data.invite);
+        await fetchInvite();
         setEmailInput('');
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to send invite');
       }
     } catch (e) {
-      console.error('Error creating invite:', e);
+      console.error('Error saving partner invite:', e);
     } finally {
       setSaving(false);
     }
@@ -131,182 +115,167 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-950/70 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-900/40 font-sans select-none backdrop-blur-xs"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-lg w-full overflow-hidden"
+        className="retro-dialog max-w-lg w-full bg-[#fffdfa] shadow-[5px_5px_0px_#2d2825] animate-in zoom-in-95 duration-100"
       >
-        {/* Header */}
-        <div className="p-5 border-b border-stone-200 flex items-center justify-between bg-stone-50">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 flex items-center justify-center">
-              <Shield className="w-4 h-4" />
+        {/* Title Bar */}
+        <div className="bg-[#52b7aa] px-3 py-2 flex items-center justify-between border-b-2 border-[#2d2825]">
+          <div className="flex items-center gap-2">
+            <div className="retro-dots">
+              <span className="retro-dot bg-[#ff7865]" />
+              <span className="retro-dot bg-[#f5b638]" />
+              <span className="retro-dot bg-white" />
             </div>
-            <div>
-              <h3 className="font-serif font-bold text-lg text-stone-900 leading-tight">
-                Accountability Partner
-              </h3>
-              <p className="text-xs text-stone-500">
-                Share a high-level status view without exposing private journals
-              </p>
+            <div className="flex items-center gap-1.5 font-extrabold text-sm text-[#2d2825]">
+              <Shield className="w-4 h-4 stroke-[2.5]" />
+              <span>Accountability Partner</span>
             </div>
           </div>
-
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-200/60 rounded-xl transition-colors"
+            className="w-6 h-6 retro-btn flex items-center justify-center text-xs font-bold bg-[#fffdf9]"
           >
-            <X className="w-5 h-5" />
+            ✕
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="p-5 space-y-4">
+        <div className="p-4 space-y-3.5 text-xs text-[#2d2825]">
           {/* Privacy Architecture Notice */}
-          <div className="p-3.5 rounded-xl bg-stone-50 border border-stone-200 text-xs text-stone-600 leading-relaxed">
-            <div className="font-semibold text-stone-900 flex items-center gap-1.5 mb-1">
-              <Eye className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Strict Privacy Isolation (RBAC)</span>
+          <div className="retro-sunken p-3 space-y-1 bg-[#faf4e8]">
+            <div className="font-extrabold flex items-center gap-1.5 text-[#2d2825]">
+              <Eye className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Strict Privacy Isolation</span>
             </div>
-            Your partner can <strong>ONLY</strong> read the aggregate status summary (current focus risk level and next deadline name). They have zero access to your check-in chats, avoidance locations, or personal entries.
+            <p className="text-[11px] leading-relaxed text-stone-700 font-medium">
+              Your partner can <strong>ONLY</strong> view the aggregate daily strip summary and whether a hard-consequence task is approaching. They have zero access to your check-in chats, avoidance reasons, or personal journal notes.
+            </p>
           </div>
 
           {loading ? (
-            <div className="py-8 text-center text-xs text-stone-500">
+            <div className="retro-sunken py-6 text-center text-xs text-stone-500 font-mono">
               Checking partner record...
             </div>
           ) : invite && invite.status === 'active' ? (
             /* Active Partner State */
-            <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/50 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  <span className="text-xs font-mono uppercase font-bold text-emerald-800">
+            <div className="retro-sunken p-3 space-y-2 bg-white">
+              <div className="flex items-center justify-between border-b border-stone-200 pb-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#52b7aa] border border-[#2d2825]" />
+                  <span className="text-xs font-extrabold text-[#2d2825]">
                     Active Partner
                   </span>
                 </div>
-                <span className="text-[11px] text-stone-400">
+                <span className="text-[10px] font-mono text-stone-500">
                   Assigned {new Date(invite.createdAt).toLocaleDateString()}
                 </span>
               </div>
 
-              <div>
-                <div className="text-sm font-semibold text-stone-900">{invite.email}</div>
-                <div className="text-xs font-mono text-stone-500 mt-0.5">UID: {invite.partnerUid}</div>
-              </div>
+              <div className="font-bold text-stone-900 text-sm">{invite.email}</div>
 
-              <div className="pt-2 border-t border-emerald-200/60 flex justify-end">
+              <div className="pt-2 flex justify-end">
                 <button
                   type="button"
                   onClick={handleRevokePartner}
                   disabled={saving}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 text-xs font-medium transition-colors"
+                  className="retro-btn px-3 py-1 text-xs text-rose-700 font-bold bg-[#fffdf9]"
                 >
-                  <UserX className="w-3.5 h-3.5" />
-                  <span>Revoke Partner Access</span>
+                  Revoke Access
                 </button>
               </div>
             </div>
           ) : invite && invite.status === 'pending' ? (
             /* Pending Invite State */
-            <div className="space-y-3">
-              <div className="p-4 rounded-xl border border-amber-200 bg-amber-50/60 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-mono uppercase font-bold text-amber-800">
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>Invite Pending</span>
-                  </div>
-                  <span className="text-[11px] text-stone-500">
-                    Created {new Date(invite.createdAt).toLocaleDateString()}
+            <div className="retro-sunken p-3 space-y-2.5 bg-white">
+              <div className="flex items-center justify-between border-b border-stone-200 pb-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#f5b638] border border-[#2d2825] animate-pulse" />
+                  <span className="text-xs font-extrabold text-[#2d2825]">
+                    Invite Pending Claim
                   </span>
                 </div>
-
-                <div className="text-sm font-semibold text-stone-900">{invite.email}</div>
-                <p className="text-xs text-stone-600 leading-relaxed">
-                  Per security directives, custom claims can only be granted out-of-band via the Admin SDK to prevent client privilege escalation.
-                </p>
+                <span className="text-[10px] font-mono text-stone-500">
+                  Created {new Date(invite.createdAt).toLocaleDateString()}
+                </span>
               </div>
 
-              {/* Copyable Admin Command Box */}
-              <div className="p-3 rounded-xl bg-stone-900 text-stone-100 space-y-2">
-                <div className="flex items-center justify-between text-[11px] text-stone-400">
-                  <span className="flex items-center gap-1">
-                    <Terminal className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Run in Cloud Shell or terminal to activate:</span>
-                  </span>
+              <div className="font-bold text-stone-900 text-sm">{invite.email}</div>
+
+              <div className="retro-sunken p-2.5 text-[11px] font-mono space-y-1 bg-[#faf4e8]">
+                <div className="text-stone-700 font-bold">Terminal Role Assignment:</div>
+                <div className="bg-[#2d2825] text-[#52b7aa] p-2 rounded-lg overflow-x-auto text-[10px] flex items-center justify-between gap-2">
+                  <span className="truncate">{adminCommand}</span>
                   <button
+                    type="button"
                     onClick={copyToClipboard}
-                    className="flex items-center gap-1 text-amber-400 hover:text-amber-300 text-[11px] font-medium"
+                    className="retro-btn px-2 py-0.5 text-[10px] shrink-0 text-[#2d2825] flex items-center gap-1 bg-[#fffdf9]"
                   >
-                    {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    <span>{copied ? 'Copied' : 'Copy Command'}</span>
+                    {copied ? <Check className="w-3 h-3 text-emerald-700 stroke-[3]" /> : <Copy className="w-3 h-3" />}
+                    <span>{copied ? 'Copied' : 'Copy'}</span>
                   </button>
                 </div>
-                <pre className="font-mono text-xs overflow-x-auto p-2 bg-black/40 rounded-lg text-stone-200 select-all">
-                  {adminCommand}
-                </pre>
               </div>
 
-              <div className="flex justify-between items-center pt-2">
+              <div className="pt-1 flex justify-end">
                 <button
+                  type="button"
                   onClick={handleRevokePartner}
                   disabled={saving}
-                  className="text-xs text-rose-600 hover:text-rose-700"
+                  className="retro-btn px-3 py-1 text-xs font-bold"
                 >
-                  Cancel pending invite
-                </button>
-                <button
-                  onClick={fetchInvite}
-                  className="text-xs text-stone-600 hover:text-stone-900 font-medium"
-                >
-                  Refresh status
+                  Cancel Invite
                 </button>
               </div>
             </div>
           ) : (
-            /* Invite Creation Form */
-            <form onSubmit={handleCreateInvite} className="space-y-3">
+            /* No Partner State */
+            <form onSubmit={handleSaveInvite} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-stone-700 uppercase tracking-wider mb-1">
-                  Partner's Email Address
+                <label className="block text-xs font-bold text-[#2d2825] mb-1">
+                  Partner Google Email Address
                 </label>
                 <input
                   type="email"
-                  required
-                  placeholder="e.g. partner@example.com"
                   value={emailInput}
                   onChange={(e) => setEmailInput(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  placeholder="partner@example.com"
+                  required
+                  className="retro-input w-full px-3 py-1.5 text-xs text-[#2d2825]"
                 />
               </div>
 
-              <div className="text-[11px] text-stone-500 leading-snug">
-                You can invite exactly one accountability partner. They will only see your focus status and next deadline name.
-              </div>
-
-              <div className="pt-2 flex justify-end">
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="retro-btn px-3 py-1 text-xs font-bold"
+                >
+                  Cancel
+                </button>
                 <button
                   type="submit"
-                  disabled={saving || !emailInput.trim()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-50 text-xs font-medium transition-all shadow-xs disabled:opacity-50"
+                  disabled={!emailInput.trim() || saving}
+                  className="retro-btn-primary px-4 py-1 text-xs font-bold disabled:opacity-50"
                 >
-                  <Send className="w-3.5 h-3.5 text-amber-400" />
-                  <span>{saving ? 'Creating...' : 'Invite Partner'}</span>
+                  {saving ? 'Saving...' : 'Send Invite'}
                 </button>
               </div>
             </form>
           )}
-        </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-stone-200 bg-stone-50 flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl border border-stone-200 text-stone-700 hover:bg-stone-100 text-xs font-medium"
-          >
-            Close
-          </button>
+          <div className="pt-2 flex justify-end border-t border-stone-200">
+            <button
+              type="button"
+              onClick={onClose}
+              className="retro-btn px-4 py-1 text-xs font-bold"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -20,6 +20,7 @@ import {
   getLogEntries,
   getDailyStrips,
   saveDailyStrip,
+  saveDailyStripMood,
   getPartnerInvite,
   createPartnerInvite,
   revokePartner,
@@ -104,16 +105,23 @@ async function authenticate(req: AuthRequest, res: Response, next: NextFunction)
 async function refreshDailyStrip(uid: string) {
   try {
     const today = new Date().toISOString().split('T')[0];
-    const [allLogs, allTasks] = await Promise.all([getLogEntries(uid), getTasks(uid)]);
+    const [allLogs, allTasks, existingStrips] = await Promise.all([
+      getLogEntries(uid),
+      getTasks(uid),
+      getDailyStrips(uid),
+    ]);
+    const todayStrip = existingStrips.find((s) => s.date === today);
+    const mood = todayStrip?.mood || null;
+
     const todayLogs = allLogs.filter((l) => l.createdAt.startsWith(today)).map((l) => l.text);
     const todayCompletedTasks = allTasks
-      .filter((t) => t.status === 'met' && t.createdAt.startsWith(today))
+      .filter((t) => t.status === 'met' && (t.completedAt || t.createdAt).startsWith(today))
       .map((t) => t.name);
 
-    if (todayLogs.length > 0 || todayCompletedTasks.length > 0) {
-      const line = await generateDailyStripSummary(today, todayLogs, todayCompletedTasks);
+    if (todayLogs.length > 0 || todayCompletedTasks.length > 0 || mood) {
+      const line = await generateDailyStripSummary(today, todayLogs, todayCompletedTasks, mood);
       if (line) {
-        await saveDailyStrip(uid, today, line);
+        await saveDailyStrip(uid, today, line, mood);
       }
     }
   } catch (e) {
@@ -238,6 +246,44 @@ app.get('/api/dailystrips', authenticate, async (req: AuthRequest, res: Response
   }
 });
 
+// POST /api/dailystrips/mood: Optional mood tap to flavor daily strip summary
+app.post('/api/dailystrips/mood', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const { mood, date } = req.body;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    const sanitizedMood = typeof mood === 'string' && mood.trim().length > 0 ? mood.trim() : null;
+
+    // Save mood
+    await saveDailyStripMood(uid, targetDate, sanitizedMood);
+
+    // Refresh strip summary if needed to immediately flavor today's line
+    const [allLogs, allTasks, profile] = await Promise.all([
+      getLogEntries(uid),
+      getTasks(uid),
+      getUserProfile(uid),
+    ]);
+    const targetLogs = allLogs.filter((l) => l.createdAt.startsWith(targetDate)).map((l) => l.text);
+    const targetTasks = allTasks
+      .filter((t) => t.status === 'met' && (t.completedAt || t.createdAt).startsWith(targetDate))
+      .map((t) => t.name);
+
+    if (targetLogs.length > 0 || targetTasks.length > 0 || sanitizedMood) {
+      const newLine = await generateDailyStripSummary(targetDate, targetLogs, targetTasks, sanitizedMood);
+      if (newLine) {
+        await saveDailyStrip(uid, targetDate, newLine, sanitizedMood);
+      }
+    }
+
+    const updatedRawStrips = await getDailyStrips(uid);
+    const dailyStrips = enrichDailyStripsWithItems(updatedRawStrips, allTasks, allLogs, profile?.timezone || 'UTC');
+    res.json({ success: true, dailyStrips });
+  } catch (err: any) {
+    console.error('[API] Error in POST /api/dailystrips/mood:', err);
+    res.status(500).json({ error: err.message || 'Failed to update mood.' });
+  }
+});
+
 // GET /api/tasks: List tasks
 app.get('/api/tasks', authenticate, async (req: AuthRequest, res: Response) => {
   try {
@@ -303,7 +349,11 @@ app.patch('/api/tasks/:id', authenticate, async (req: AuthRequest, res: Response
 
     const updates: any = {};
     if (name !== undefined) updates.name = String(name).trim();
-    if (dueAt !== undefined) updates.dueAt = String(dueAt);
+    if (dueAt !== undefined) {
+      updates.dueAt = String(dueAt);
+      updates.lastGuaranteedNudgeAt = null;
+      updates.lastEscalationNudgeAt = null;
+    }
     if (anchorPhrase !== undefined) updates.anchorPhrase = anchorPhrase;
     if (consequenceType !== undefined) {
       updates.consequenceType = consequenceType;

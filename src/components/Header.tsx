@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock, Shield, UserCheck, LogOut, LogIn, User } from 'lucide-react';
+import { Clock, Shield, UserCheck, LogOut, LogIn, User, Sparkles } from 'lucide-react';
 import type { UserProfile } from '../types';
 
 interface HeaderProps {
@@ -18,80 +18,82 @@ export const Header: React.FC<HeaderProps> = ({
   isPartnerMode = false,
 }) => {
   return (
-    <header className="border-b border-stone-200/80 bg-[#f6f5f1]/80 backdrop-blur-md sticky top-0 z-30">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+    <header className="sticky top-0 z-30 px-3 sm:px-6 pt-2 pb-1 select-none">
+      <div className="max-w-6xl mx-auto retro-card bg-[#fffdfa] px-3 sm:px-4 h-14 flex items-center justify-between shadow-[3px_3px_0px_#2d2825]">
         {/* Brand & Archetype */}
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-stone-900 text-stone-100 flex items-center justify-center font-bold text-base shadow-xs">
-            <Clock className="w-4.5 h-4.5 text-amber-400" />
+          {/* Three Friendly Circular Buttons */}
+          <div className="retro-dots">
+            <span className="retro-dot bg-[#ff7865]" />
+            <span className="retro-dot bg-[#f5b638]" />
+            <span className="retro-dot bg-[#52b7aa]" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-extrabold text-lg tracking-tight text-stone-900">
+
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-[#f5b638] border-2 border-[#2d2825] flex items-center justify-center shadow-[1.5px_1.5px_0px_#2d2825]">
+              <Clock className="w-4 h-4 text-[#2d2825] stroke-[2.5]" />
+            </div>
+            <div>
+              <span className="font-extrabold text-base tracking-tight text-[#2d2825] flex items-center gap-1">
                 Last Call
               </span>
-              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded-full bg-stone-200 text-stone-700 font-semibold tracking-wider">
-                ADHD Focus Journal
-              </span>
             </div>
-            <p className="text-[11px] text-stone-500 hidden sm:block">
-              Task initiation & time-blindness calibration powered by Gemini
-            </p>
+          </div>
+
+          <div className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#fca5b0]/40 border border-[#2d2825] text-[11px] font-bold text-[#2d2825]">
+            <Sparkles className="w-3 h-3 text-[#ff7865]" />
+            <span>Focus & Time-Blindness</span>
           </div>
         </div>
 
         {/* User Actions & Auth */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-2">
           {user ? (
             <>
               {isPartnerMode ? (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200/80 text-indigo-700 text-xs font-semibold font-mono">
-                  <UserCheck className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Partner View: {user.ownerUid?.slice(0, 8)}...</span>
+                <div className="px-3 py-1 rounded-xl bg-[#52b7aa]/30 border-2 border-[#2d2825] text-xs font-bold text-[#2d2825] flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Partner: {user.ownerUid?.slice(0, 6)}...</span>
                 </div>
               ) : (
                 <button
                   onClick={onOpenPartnerModal}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-stone-200/90 bg-white hover:bg-stone-50 text-stone-700 text-xs font-medium transition-all shadow-xs"
+                  className="retro-btn px-3 py-1.5 text-xs flex items-center gap-1.5 font-bold bg-[#fffdf9]"
                   title="Manage Accountability Partner"
                 >
-                  <Shield className="w-3.5 h-3.5 text-stone-500" />
+                  <Shield className="w-3.5 h-3.5 text-[#2d2825] stroke-[2.5]" />
                   <span className="hidden sm:inline">Partner</span>
                 </button>
               )}
 
-              <div className="flex items-center gap-2 pl-2 border-l border-stone-200">
-                <div className="w-8 h-8 rounded-xl bg-stone-200 text-stone-700 flex items-center justify-center text-xs font-semibold overflow-hidden shadow-xs">
+              <div className="flex items-center gap-2 pl-2 border-l-2 border-[#2d2825]">
+                <div className="w-7 h-7 rounded-xl border-2 border-[#2d2825] bg-[#fca5b0] text-[#2d2825] flex items-center justify-center text-xs font-bold overflow-hidden shadow-[1.5px_1.5px_0px_#2d2825]">
                   {user.photoURL ? (
                     <img src={user.photoURL} alt={user.displayName || 'User'} className="w-full h-full object-cover" />
                   ) : (
-                    user.displayName?.charAt(0).toUpperCase() || <User className="w-4 h-4" />
+                    user.displayName?.charAt(0).toUpperCase() || <User className="w-3.5 h-3.5 stroke-[2.5]" />
                   )}
                 </div>
-                <div className="hidden md:block text-left">
-                  <div className="text-xs font-semibold text-stone-900 leading-tight">
-                    {user.displayName || user.email?.split('@')[0] || 'Member'}
-                  </div>
-                  <div className="text-[10px] text-stone-500 font-mono leading-tight truncate max-w-[120px]">
-                    {user.email}
-                  </div>
+                <div className="hidden md:block text-left text-xs font-bold truncate max-w-[120px] text-[#2d2825]">
+                  {user.displayName || user.email?.split('@')[0] || 'User'}
                 </div>
                 <button
                   onClick={onLogout}
-                  className="p-1.5 text-stone-400 hover:text-stone-700 rounded-xl hover:bg-stone-200/60 transition-colors"
+                  className="retro-btn px-2.5 py-1.5 text-xs font-bold flex items-center gap-1 bg-[#fffdf9]"
                   title="Sign out"
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-3 h-3 text-[#2d2825] stroke-[2.5]" />
+                  <span className="hidden sm:inline">Exit</span>
                 </button>
               </div>
             </>
           ) : (
             <button
               onClick={onLogin}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-stone-900 text-stone-50 hover:bg-stone-800 text-xs font-medium transition-all shadow-xs active:scale-[0.98]"
+              className="retro-btn-primary px-4 py-1.5 text-xs font-bold flex items-center gap-1.5"
             >
-              <LogIn className="w-3.5 h-3.5 text-amber-400" />
-              <span>Sign In with Google</span>
+              <LogIn className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Log In</span>
             </button>
           )}
         </div>
@@ -99,4 +101,3 @@ export const Header: React.FC<HeaderProps> = ({
     </header>
   );
 };
-

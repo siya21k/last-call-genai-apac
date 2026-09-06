@@ -360,9 +360,20 @@ export async function getTaskEntries(uid: string, taskId: string): Promise<TaskE
 }
 
 export async function updateTask(uid: string, taskId: string, updates: Partial<Task>): Promise<Task> {
+  const finalUpdates: Partial<Task> = { ...updates };
+  // If dueAt is being modified, reset nudge tracking so nudges can trigger under the new deadline
+  if (finalUpdates.dueAt !== undefined) {
+    if (finalUpdates.lastGuaranteedNudgeAt === undefined) {
+      finalUpdates.lastGuaranteedNudgeAt = null;
+    }
+    if (finalUpdates.lastEscalationNudgeAt === undefined) {
+      finalUpdates.lastEscalationNudgeAt = null;
+    }
+  }
+
   try {
     const taskRef = adminDb.collection('users').doc(uid).collection('tasks').doc(taskId);
-    await taskRef.update(sanitizePayload(updates));
+    await taskRef.update(sanitizePayload(finalUpdates));
   } catch (err: any) {
     console.warn('[DB] Fallback updateTask:', err.message);
   }
@@ -370,7 +381,7 @@ export async function updateTask(uid: string, taskId: string, updates: Partial<T
   const store = loadLocalStore();
   const key = `${uid}_${taskId}`;
   if (store.tasks[key]) {
-    store.tasks[key] = { ...store.tasks[key], ...updates };
+    store.tasks[key] = { ...store.tasks[key], ...finalUpdates };
     saveLocalStore(store);
     return store.tasks[key];
   }
@@ -466,38 +477,89 @@ export async function getDailyStrips(uid: string): Promise<DailyStrip[]> {
   try {
     const snap = await adminDb.collection('users').doc(uid).collection('dailyStrip').get();
     snap.forEach((doc) => {
-      strips.push({ date: doc.id, ...(doc.data() as any) });
+      const data = doc.data() as any;
+      strips.push({ date: doc.id, line: data.line || '', mood: data.mood || null });
     });
     return strips.sort((a, b) => b.date.localeCompare(a.date));
   } catch (err: any) {
     console.warn('[DB] Fallback getDailyStrips:', err.message);
     const store = loadLocalStore();
-    const userStrips = store.dailyStrip[uid] || {};
+    const userStrips = (store.dailyStrip as any)?.[uid] || {};
     return Object.entries(userStrips)
-      .map(([date, line]) => ({ date, line }))
+      .map(([date, val]: [string, any]) => {
+        if (typeof val === 'string') {
+          return { date, line: val, mood: null };
+        }
+        return { date, line: val.line || '', mood: val.mood || null };
+      })
       .sort((a, b) => b.date.localeCompare(a.date));
   }
 }
 
-export async function saveDailyStrip(uid: string, date: string, line: string): Promise<DailyStrip> {
-  const item: DailyStrip = { date, line };
+export async function saveDailyStrip(
+  uid: string,
+  date: string,
+  line: string,
+  mood?: string | null
+): Promise<DailyStrip> {
+  const item: DailyStrip = { date, line, mood: mood || null };
+  try {
+    const payload: any = { line };
+    if (mood !== undefined) {
+      payload.mood = mood;
+    }
+    await adminDb
+      .collection('users')
+      .doc(uid)
+      .collection('dailyStrip')
+      .doc(date)
+      .set(sanitizePayload(payload), { merge: true });
+  } catch (err: any) {
+    console.warn('[DB] Fallback saveDailyStrip:', err.message);
+  }
+
+  const store = loadLocalStore() as any;
+  if (!store.dailyStrip) store.dailyStrip = {};
+  if (!store.dailyStrip[uid]) store.dailyStrip[uid] = {};
+  const prev = store.dailyStrip[uid][date];
+  const existingMood = typeof prev === 'object' ? prev?.mood : null;
+  store.dailyStrip[uid][date] = {
+    line,
+    mood: mood !== undefined ? mood : existingMood,
+  };
+  saveLocalStore(store);
+
+  return item;
+}
+
+export async function saveDailyStripMood(
+  uid: string,
+  date: string,
+  mood: string | null
+): Promise<{ date: string; mood: string | null }> {
   try {
     await adminDb
       .collection('users')
       .doc(uid)
       .collection('dailyStrip')
       .doc(date)
-      .set(sanitizePayload({ line }));
+      .set(sanitizePayload({ mood }), { merge: true });
   } catch (err: any) {
-    console.warn('[DB] Fallback saveDailyStrip:', err.message);
+    console.warn('[DB] Fallback saveDailyStripMood:', err.message);
   }
 
-  const store = loadLocalStore();
+  const store = loadLocalStore() as any;
+  if (!store.dailyStrip) store.dailyStrip = {};
   if (!store.dailyStrip[uid]) store.dailyStrip[uid] = {};
-  store.dailyStrip[uid][date] = line;
+  const prev = store.dailyStrip[uid][date];
+  const existingLine = typeof prev === 'string' ? prev : prev?.line || '';
+  store.dailyStrip[uid][date] = {
+    line: existingLine,
+    mood,
+  };
   saveLocalStore(store);
 
-  return item;
+  return { date, mood };
 }
 
 /**

@@ -23,9 +23,11 @@ export async function logout(): Promise<void> {
 }
 
 // Test connectivity on initial load as recommended by Firebase skill
-export async function testConnection() {
+export async function testConnection(): Promise<void> {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    if (auth.currentUser) {
+      await getDocFromServer(doc(db, 'test', 'connection'));
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('Firebase client is offline. Verify configuration.');

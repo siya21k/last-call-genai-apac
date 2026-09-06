@@ -58,6 +58,7 @@ export interface DailyStripItem {
 export interface DailyStrip {
   date: string;
   line: string;
+  mood?: string | null;
   items?: DailyStripItem[];
 }
 
