@@ -1,0 +1,94 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile document storing basic identity information.",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "Deadline": {
+      "title": "Deadline",
+      "description": "ADHD focus task deadline tracked for initiation and completion.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "dueAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["pending", "met", "missed"] },
+        "latestRiskLevel": { "type": "string", "enum": ["low", "medium", "critical", "none"] }
+      },
+      "required": ["name", "dueAt", "createdAt", "status"]
+    },
+    "CheckInEntry": {
+      "title": "CheckInEntry",
+      "description": "ADHD check-in conversation log with AI and structured output summary.",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string" },
+        "riskLevel": { "type": "string", "enum": ["low", "medium", "critical"] },
+        "summary": { "type": "string" },
+        "actionItems": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "locationTag": { "type": "string", "enum": ["home", "office", "in bed", "other"] },
+        "conversation": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "notified": { "type": "boolean" }
+      },
+      "required": ["category", "riskLevel", "summary", "actionItems", "locationTag", "conversation", "createdAt", "notified"]
+    },
+    "Status": {
+      "title": "Status",
+      "description": "Computed aggregate status metrics including streak and risk level for accountability.",
+      "type": "object",
+      "properties": {
+        "streak": { "type": "number" },
+        "nextDeadlineName": { "type": "string" },
+        "nextDeadlineAt": { "type": "string", "format": "date-time" },
+        "currentRiskLevel": { "type": "string", "enum": ["low", "medium", "critical", "none"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["streak", "currentRiskLevel", "updatedAt"]
+    },
+    "PartnerInvite": {
+      "title": "PartnerInvite",
+      "description": "Single-document accountability partner invite record.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "status": { "type": "string", "enum": ["pending", "active", "revoked"] },
+        "partnerUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Root user documents containing public profile details."
+    },
+    "/users/{userId}/deadlines/{deadlineId}": {
+      "schema": "Deadline",
+      "description": "Subcollection of deadlines created and monitored by the user."
+    },
+    "/users/{userId}/deadlines/{deadlineId}/entries/{entryId}": {
+      "schema": "CheckInEntry",
+      "description": "Subcollection of multi-turn AI check-ins with structured extraction."
+    },
+    "/users/{userId}/status/{statusDoc}": {
+      "schema": "Status",
+      "description": "Aggregate summary status document accessible by the owner and accountability partner."
+    },
+    "/users/{userId}/partnerInvite/{inviteDoc}": {
+      "schema": "PartnerInvite",
+      "description": "Document tracking pending or active accountability partner invitation."
+    }
+  }
+}

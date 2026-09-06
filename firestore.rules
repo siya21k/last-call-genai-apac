@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+    function isPartnerOf(uid) {
+      return isAuthenticated() && request.auth.token.role == 'partner' && request.auth.token.ownerUid == uid;
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      // Deadlines subcollection:
+      // All writes (create, mark-done, missed-detection) happen via backend Admin SDK.
+      // Blanket deny on client writes to prevent metric tampering.
+      match /deadlines/{deadlineId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+
+        // Entries subcollection:
+        // Saved by backend after multi-turn Gemini check-in & structured extraction.
+        // Blanket deny on client writes to prevent tampering with conversations or risk ratings.
+        match /entries/{entryId} {
+          allow read: if isOwner(userId);
+          allow write: if false;
+        }
+      }
+
+      // Status document:
+      // Only document a partner can read. Owner can read. Written solely by backend transaction.
+      match /status/{statusDoc} {
+        allow read: if isOwner(userId) || isPartnerOf(userId);
+        allow write: if false;
+      }
+
+      // Partner invite document:
+      // Readable and writable only by the owner; partner cannot read before custom claim is set.
+      match /partnerInvite/{inviteDoc} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+  }
+}

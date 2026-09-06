@@ -1,0 +1,68 @@
+{
+  "deadlines": {
+    "test_user_1_dl_1788670695678_2kozr": {
+      "id": "dl_1788670695678_2kozr",
+      "name": "File quarterly taxes",
+      "dueAt": "2026-09-06T12:00:00.000Z",
+      "createdAt": "2026-09-06T04:58:15.678Z",
+      "status": "met",
+      "latestRiskLevel": "medium"
+    }
+  },
+  "entries": {
+    "test_user_1_dl_1788670695678_2kozr_entry_1788670714334_qx5r6": {
+      "id": "entry_1788670714334_qx5r6",
+      "deadlineId": "dl_1788670695678_2kozr",
+      "category": "transition resistance",
+      "riskLevel": "medium",
+      "summary": "The user is stuck in bed scrolling due to feeling overwhelmed by receipt filing. The agreed plan is to put the phone away, get out of bed, and open the tax folder to enter one number.",
+      "actionItems": [
+        "Put phone face down across the room",
+        "Get out of bed",
+        "Open the tax folder and enter one number"
+      ],
+      "locationTag": "in bed",
+      "conversation": [
+        {
+          "role": "user",
+          "text": "I am stuck in bed scrolling my phone because filing receipts feels overwhelming."
+        },
+        {
+          "role": "assistant",
+          "text": "Classic transition freeze. Put the phone face down across the room. Stand up, open the tax folder, and enter just ONE number."
+        },
+        {
+          "role": "user",
+          "text": "Okay, I will get out of bed and open the folder right now."
+        }
+      ],
+      "createdAt": "2026-09-06T04:58:34.334Z",
+      "notified": false
+    }
+  },
+  "statuses": {
+    "test_user_1": {
+      "streak": 1,
+      "nextDeadlineName": null,
+      "nextDeadlineAt": null,
+      "currentRiskLevel": "none",
+      "updatedAt": "2026-09-06T04:58:34.406Z"
+    },
+    "demo_owner_101": {
+      "streak": 0,
+      "nextDeadlineName": null,
+      "nextDeadlineAt": null,
+      "currentRiskLevel": "none",
+      "updatedAt": "2026-09-06T05:03:59.499Z"
+    }
+  },
+  "invites": {
+    "test_user_1": {
+      "email": "partner.jordan@example.com",
+      "status": "revoked",
+      "partnerUid": null,
+      "createdAt": "2026-09-06T04:58:37.366Z",
+      "updatedAt": "2026-09-06T04:59:17.286Z"
+    }
+  }
+}

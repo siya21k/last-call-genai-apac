@@ -1,0 +1,6 @@
+{
+  "name": "Last Call",
+  "description": "A user-authenticated deadline-and-focus journal for people with ADHD/time-blindness with Gemini task initiation check-ins and Firestore accountability tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
