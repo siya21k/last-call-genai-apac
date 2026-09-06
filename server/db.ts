@@ -14,6 +14,7 @@ import type {
   PartnerInvite,
   AnchorTimes,
   UserProfile,
+  JournalEntry,
 } from '../src/types';
 
 // Load Firebase applet configuration
@@ -52,6 +53,7 @@ interface MemoryStore {
   logEntries: Record<string, LogEntry[]>; // key: `${uid}`
   dailyStrip: Record<string, Record<string, string>>; // key: `${uid}` -> { [date]: line }
   invites: Record<string, PartnerInvite>; // key: `${uid}`
+  journalEntries: Record<string, JournalEntry[]>; // key: `${uid}`
 }
 
 function loadLocalStore(): MemoryStore {
@@ -66,12 +68,13 @@ function loadLocalStore(): MemoryStore {
         logEntries: parsed.logEntries || {},
         dailyStrip: parsed.dailyStrip || {},
         invites: parsed.invites || {},
+        journalEntries: parsed.journalEntries || {},
       };
     }
   } catch (e) {
     console.warn('[DB] Error loading local store:', e);
   }
-  return { users: {}, tasks: {}, taskEntries: {}, threadMessages: {}, logEntries: {}, dailyStrip: {}, invites: {} };
+  return { users: {}, tasks: {}, taskEntries: {}, threadMessages: {}, logEntries: {}, dailyStrip: {}, invites: {}, journalEntries: {} };
 }
 
 function saveLocalStore(store: MemoryStore) {
@@ -107,7 +110,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
 
 export async function upsertUserProfile(
   uid: string,
-  params: { email?: string | null; displayName?: string | null; anchorTimes?: AnchorTimes; notificationToken?: string }
+  params: { email?: string | null; displayName?: string | null; anchorTimes?: AnchorTimes; notificationToken?: string; timezone?: string }
 ): Promise<UserProfile> {
   const nowIso = new Date().toISOString();
   const existing = (await getUserProfile(uid)) || {
@@ -116,6 +119,7 @@ export async function upsertUserProfile(
     displayName: params.displayName || null,
     photoURL: null,
     anchorTimes: { beforeWork: '08:30', afterWork: '17:30', beforeSleep: '23:00' },
+    timezone: params.timezone || 'UTC',
   };
 
   const updated: UserProfile = {
@@ -124,6 +128,7 @@ export async function upsertUserProfile(
     displayName: params.displayName !== undefined ? params.displayName : existing.displayName,
     anchorTimes: params.anchorTimes ? { ...existing.anchorTimes, ...params.anchorTimes } : existing.anchorTimes,
     notificationToken: params.notificationToken !== undefined ? params.notificationToken : existing.notificationToken,
+    timezone: params.timezone !== undefined ? params.timezone : (existing.timezone || 'UTC'),
   };
 
   try {
@@ -201,21 +206,23 @@ export async function createTask(
 
 export async function markTaskDone(uid: string, taskId: string): Promise<Task> {
   let task: Task | null = null;
+  const nowIso = new Date().toISOString();
   try {
     const taskRef = adminDb.collection('users').doc(uid).collection('tasks').doc(taskId);
     const snap = await taskRef.get();
     if (snap.exists) {
-      task = { id: snap.id, ...(snap.data() as any), status: 'met' };
-      await taskRef.update({ status: 'met' });
+      task = { id: snap.id, ...(snap.data() as any), status: 'met', completedAt: nowIso };
+      await taskRef.update({ status: 'met', completedAt: nowIso });
     }
   } catch (err: any) {
-    console.warn('[DB] Fallback markTaskDone:', err.message);
+    console.warn('[DB] Fall markTaskDone:', err.message);
   }
 
   const store = loadLocalStore();
   const key = `${uid}_${taskId}`;
   if (store.tasks[key]) {
     store.tasks[key].status = 'met';
+    store.tasks[key].completedAt = nowIso;
     task = { ...store.tasks[key] };
     saveLocalStore(store);
   }
@@ -230,7 +237,7 @@ export async function reopenTask(uid: string, taskId: string): Promise<Task> {
   let task: Task | null = null;
   try {
     const taskRef = adminDb.collection('users').doc(uid).collection('tasks').doc(taskId);
-    await taskRef.update({ status: 'pending' });
+    await taskRef.update({ status: 'pending', completedAt: null });
     const snap = await taskRef.get();
     if (snap.exists) {
       task = { id: snap.id, ...(snap.data() as any) };
@@ -243,6 +250,7 @@ export async function reopenTask(uid: string, taskId: string): Promise<Task> {
   const key = `${uid}_${taskId}`;
   if (store.tasks[key]) {
     store.tasks[key].status = 'pending';
+    store.tasks[key].completedAt = null;
     task = { ...store.tasks[key] };
     saveLocalStore(store);
   }
@@ -623,4 +631,84 @@ export async function revokePartner(uid: string): Promise<{ success: boolean }> 
   }
 
   return { success: true };
+}
+
+/**
+ * Journal Entries Management (users/{uid}/journalEntries/{entryId})
+ */
+export async function getJournalEntries(uid: string): Promise<JournalEntry[]> {
+  const entries: JournalEntry[] = [];
+  try {
+    const snap = await adminDb
+      .collection('users')
+      .doc(uid)
+      .collection('journalEntries')
+      .orderBy('createdAt', 'desc')
+      .get();
+    snap.forEach((doc) => {
+      entries.push({ id: doc.id, ...(doc.data() as any) });
+    });
+    return entries;
+  } catch (err: any) {
+    console.warn('[DB] Fallback getJournalEntries:', err.message);
+    const store = loadLocalStore();
+    return (store.journalEntries?.[uid] || []).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+}
+
+export async function createJournalEntry(
+  uid: string,
+  params: { text: string; title?: string | null; link?: string | null; tags?: string[] }
+): Promise<JournalEntry> {
+  const entryId = 'jnl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const nowIso = new Date().toISOString();
+
+  const entry: JournalEntry = {
+    id: entryId,
+    text: params.text.trim(),
+    title: params.title ? params.title.trim() : null,
+    link: params.link ? params.link.trim() : null,
+    tags: Array.isArray(params.tags) ? params.tags : [],
+    createdAt: nowIso,
+  };
+
+  try {
+    await adminDb
+      .collection('users')
+      .doc(uid)
+      .collection('journalEntries')
+      .doc(entryId)
+      .set(sanitizePayload(entry));
+  } catch (err: any) {
+    console.warn('[DB] Fallback createJournalEntry:', err.message);
+  }
+
+  const store = loadLocalStore();
+  if (!store.journalEntries) store.journalEntries = {};
+  if (!store.journalEntries[uid]) store.journalEntries[uid] = [];
+  store.journalEntries[uid].unshift(entry);
+  saveLocalStore(store);
+
+  return entry;
+}
+
+export async function deleteJournalEntry(uid: string, entryId: string): Promise<void> {
+  try {
+    await adminDb
+      .collection('users')
+      .doc(uid)
+      .collection('journalEntries')
+      .doc(entryId)
+      .delete();
+  } catch (err: any) {
+    console.warn('[DB] Fallback deleteJournalEntry:', err.message);
+  }
+
+  const store = loadLocalStore();
+  if (store.journalEntries?.[uid]) {
+    store.journalEntries[uid] = store.journalEntries[uid].filter((e) => e.id !== entryId);
+    saveLocalStore(store);
+  }
 }

@@ -99,7 +99,6 @@ export const RetroChatThread: React.FC<RetroChatThreadProps> = ({
             Free-type a task, something you just finished, or what's stopping you right now.
           </span>
         </div>
-        <span className="shrink-0 text-stone-400 hidden md:inline">NO SHAME • PURE EXECUTION</span>
       </div>
 
       {/* Messages Transcript Scroll Area */}

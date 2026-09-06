@@ -23,6 +23,9 @@ import {
   getPartnerInvite,
   createPartnerInvite,
   revokePartner,
+  getJournalEntries,
+  createJournalEntry,
+  deleteJournalEntry,
 } from './server/db';
 import {
   classifyAndExtractMessage,
@@ -30,7 +33,9 @@ import {
   generateCheckInCoaching,
   extractCheckInCompletion,
   hasDegenerateRepetition,
+  getZonedParts,
 } from './server/gemini';
+import type { DailyStrip, DailyStripItem } from './src/types';
 
 const app = express();
 const PORT = 3000;
@@ -116,6 +121,62 @@ async function refreshDailyStrip(uid: string) {
   }
 }
 
+function enrichDailyStripsWithItems(
+  strips: DailyStrip[],
+  tasks: any[],
+  logEntries: any[],
+  timeZone: string = 'UTC'
+): DailyStrip[] {
+  const getDateStr = (isoString?: string | null) => {
+    if (!isoString) return null;
+    try {
+      const parts = getZonedParts(new Date(isoString), timeZone);
+      return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+    } catch {
+      return isoString.slice(0, 10);
+    }
+  };
+
+  return strips.map((strip) => {
+    const items: DailyStripItem[] = [];
+
+    // Completed tasks on this day
+    tasks.forEach((t) => {
+      if (t.status === 'met') {
+        const d = getDateStr(t.completedAt || t.dueAt || t.createdAt);
+        if (d === strip.date) {
+          items.push({
+            id: t.id,
+            type: 'task',
+            text: t.name,
+            timestamp: t.completedAt || t.dueAt || t.createdAt,
+          });
+        }
+      }
+    });
+
+    // Log entries on this day
+    logEntries.forEach((l) => {
+      const d = getDateStr(l.createdAt);
+      if (d === strip.date) {
+        items.push({
+          id: l.id,
+          type: 'log',
+          text: l.text,
+          timestamp: l.createdAt,
+        });
+      }
+    });
+
+    items.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    return {
+      ...strip,
+      items,
+    };
+  });
+}
+
 // ----------------------------------------------------
 // API ROUTES
 // ----------------------------------------------------
@@ -128,12 +189,15 @@ app.get('/api/health', (req, res) => {
 app.get('/api/thread', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user!.uid;
-    const [messages, tasks, profile, dailyStrips] = await Promise.all([
+    const [messages, tasks, profile, rawStrips, logEntries] = await Promise.all([
       getThreadMessages(uid),
       getTasks(uid),
       getUserProfile(uid),
       getDailyStrips(uid),
+      getLogEntries(uid),
     ]);
+
+    const dailyStrips = enrichDailyStripsWithItems(rawStrips, tasks, logEntries, profile?.timezone || 'UTC');
 
     // Initial greeting if thread is completely empty
     if (messages.length === 0) {
@@ -157,6 +221,23 @@ app.get('/api/thread', authenticate, async (req: AuthRequest, res: Response) => 
   }
 });
 
+// GET /api/dailystrips: Load enriched daily strips
+app.get('/api/dailystrips', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const [rawStrips, tasks, profile, logEntries] = await Promise.all([
+      getDailyStrips(uid),
+      getTasks(uid),
+      getUserProfile(uid),
+      getLogEntries(uid),
+    ]);
+    const dailyStrips = enrichDailyStripsWithItems(rawStrips, tasks, logEntries, profile?.timezone || 'UTC');
+    res.json({ dailyStrips });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to fetch daily strips.' });
+  }
+});
+
 // GET /api/tasks: List tasks
 app.get('/api/tasks', authenticate, async (req: AuthRequest, res: Response) => {
   try {
@@ -166,6 +247,138 @@ app.get('/api/tasks', authenticate, async (req: AuthRequest, res: Response) => {
   } catch (err: any) {
     console.error('[API] Error in GET /api/tasks:', err);
     res.status(500).json({ error: err.message || 'Failed to fetch tasks.' });
+  }
+});
+
+// POST /api/tasks: Add task manually through exact same pipeline
+app.post('/api/tasks', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const { name, dueAt, consequenceType, anchorPhrase } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Task name is required.' });
+    }
+
+    const task = await createTask(uid, {
+      name: name.trim(),
+      dueAt: dueAt || new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      consequenceType: consequenceType || 'unspecified',
+      anchorPhrase: anchorPhrase || null,
+    });
+
+    await addThreadMessage(uid, {
+      role: 'system',
+      text: `Added task '${task.name}' due ${new Date(task.dueAt).toLocaleString('en-US', {
+        weekday: 'short',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      })}.`,
+      relatedTaskId: task.id,
+      messageType: 'task-created',
+    });
+
+    await refreshDailyStrip(uid);
+    res.json({ task });
+  } catch (err: any) {
+    console.error('[API] Error in POST /api/tasks:', err);
+    res.status(500).json({ error: err.message || 'Failed to create task.' });
+  }
+});
+
+// PATCH /api/tasks/:id: Edit task deadline/details directly (e.g. push deadline back)
+app.patch('/api/tasks/:id', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const { id } = req.params;
+    const { name, dueAt, consequenceType, anchorPhrase } = req.body || {};
+
+    const existingTasks = await getTasks(uid);
+    const existing = existingTasks.find((t) => t.id === id);
+    if (!existing) {
+      return res.status(404).json({ error: `Task ${id} not found.` });
+    }
+
+    const updates: any = {};
+    if (name !== undefined) updates.name = String(name).trim();
+    if (dueAt !== undefined) updates.dueAt = String(dueAt);
+    if (anchorPhrase !== undefined) updates.anchorPhrase = anchorPhrase;
+    if (consequenceType !== undefined) {
+      updates.consequenceType = consequenceType;
+    } else {
+      if (!existing.consequenceType || existing.consequenceType === 'unspecified') {
+        updates.consequenceType = 'unspecified';
+      }
+    }
+
+    const updatedTask = await updateTask(uid, id, updates);
+
+    await addThreadMessage(uid, {
+      role: 'system',
+      text: `Updated '${updatedTask.name}' due date to ${new Date(updatedTask.dueAt).toLocaleString('en-US', {
+        weekday: 'short',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      })}.`,
+      relatedTaskId: updatedTask.id,
+      messageType: 'normal',
+    });
+
+    await refreshDailyStrip(uid);
+    res.json({ task: updatedTask });
+  } catch (err: any) {
+    console.error('[API] Error in PATCH /api/tasks/:id:', err);
+    res.status(500).json({ error: err.message || 'Failed to update task.' });
+  }
+});
+
+// GET /api/journal: List all journal entries
+app.get('/api/journal', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const entries = await getJournalEntries(uid);
+    res.json({ entries });
+  } catch (err: any) {
+    console.error('[API] Error in GET /api/journal:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch journal entries.' });
+  }
+});
+
+// POST /api/journal: Create journal entry
+app.post('/api/journal', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const { text, title, tags } = req.body || {};
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'Entry text is required.' });
+    }
+    const entry = await createJournalEntry(uid, {
+      text: text.trim(),
+      title: title ? String(title).trim() : undefined,
+      tags: Array.isArray(tags) ? tags : [],
+    });
+    res.json({ entry });
+  } catch (err: any) {
+    console.error('[API] Error in POST /api/journal:', err);
+    res.status(500).json({ error: err.message || 'Failed to save journal entry.' });
+  }
+});
+
+// DELETE /api/journal/:id: Delete journal entry
+app.delete('/api/journal/:id', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user!.uid;
+    const { id } = req.params;
+    await deleteJournalEntry(uid, id);
+    res.json({ success: true, id });
+  } catch (err: any) {
+    console.error('[API] Error in DELETE /api/journal/:id:', err);
+    res.status(500).json({ error: err.message || 'Failed to delete journal entry.' });
   }
 });
 
@@ -194,7 +407,7 @@ app.post('/api/tasks/:id/done', authenticate, async (req: AuthRequest, res: Resp
   }
 });
 
-// POST /api/tasks/:id/release: Shame-free amnesty release of stale/overdue tasks
+// POST /api/tasks/:id/release: Amnesty release of stale/overdue tasks
 app.post('/api/tasks/:id/release', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user!.uid;
@@ -203,7 +416,7 @@ app.post('/api/tasks/:id/release', authenticate, async (req: AuthRequest, res: R
 
     await addThreadMessage(uid, {
       role: 'system',
-      text: `Released '${task.name}' without penalty. Board cleared.`,
+      text: `Released '${task.name}'. Board cleared.`,
       relatedTaskId: task.id,
       messageType: 'amnesty',
     });
@@ -325,7 +538,7 @@ app.post('/api/tasks/:id/checkin/complete', authenticate, async (req: AuthReques
 app.post('/api/thread/message', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user!.uid;
-    const { message } = req.body || {};
+    const { message, clientTimezone, clientOffsetMinutes } = req.body || {};
 
     if (!message || typeof message !== 'string' || !message.trim()) {
       return res.status(400).json({ error: 'Message cannot be empty.' });
@@ -346,6 +559,11 @@ app.post('/api/thread/message', authenticate, async (req: AuthRequest, res: Resp
       getThreadMessages(uid),
     ]);
 
+    // Auto-update user timezone if provided and not yet stored
+    if (clientTimezone && (!profile || profile.timezone !== clientTimezone)) {
+      await upsertUserProfile(uid, { timezone: clientTimezone });
+    }
+
     const openTasks = tasks.filter((t) => t.status === 'pending');
     const systemMessages = threadMessages.filter((m) => m.role === 'system');
     const lastSystemMsg = systemMessages.length > 0 ? systemMessages[systemMessages.length - 1] : null;
@@ -354,6 +572,8 @@ app.post('/api/thread/message', authenticate, async (req: AuthRequest, res: Resp
     const nowIso = new Date().toISOString();
     const classification = await classifyAndExtractMessage(trimmed, {
       nowIso,
+      clientTimezone,
+      clientOffsetMinutes,
       anchorTimes: profile?.anchorTimes,
       openTasks: openTasks.map((t) => ({ id: t.id, name: t.name, dueAt: t.dueAt, consequenceType: t.consequenceType })),
       lastSystemMessage: lastSystemMsg
@@ -595,10 +815,11 @@ app.get('/api/settings', authenticate, async (req: AuthRequest, res: Response) =
 app.post('/api/settings', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user!.uid;
-    const { anchorTimes, notificationToken } = req.body || {};
+    const { anchorTimes, notificationToken, timezone } = req.body || {};
     const updated = await upsertUserProfile(uid, {
       anchorTimes,
       notificationToken,
+      timezone,
     });
     res.json({ settings: updated });
   } catch (err: any) {

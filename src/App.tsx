@@ -6,7 +6,16 @@ import { SettingsModal } from './components/SettingsModal';
 import { PartnerModal } from './components/PartnerModal';
 import { DailyStripHeader } from './components/DailyStripHeader';
 import { auth, loginWithGoogle, logout, onAuthStateChanged, testConnection } from './lib/firebase';
-import type { Task, ThreadMessage, AnchorTimes, UserProfile, PartnerStatusView, DailyStrip } from './types';
+import type {
+  Task,
+  ThreadMessage,
+  AnchorTimes,
+  UserProfile,
+  PartnerStatusView,
+  DailyStrip,
+  JournalEntry,
+  ConsequenceType,
+} from './types';
 import { Clock, ShieldCheck, UserCheck, AlertTriangle, CheckCircle2, Shield, Eye, RefreshCw } from 'lucide-react';
 
 export function App() {
@@ -18,6 +27,7 @@ export function App() {
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [dailyStrips, setDailyStrips] = useState<DailyStrip[]>([]);
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [anchorTimes, setAnchorTimes] = useState<AnchorTimes>({
     beforeWork: '08:30',
     afterWork: '17:30',
@@ -115,8 +125,138 @@ export function App() {
   useEffect(() => {
     if (token) {
       loadThreadData();
+      loadJournalEntries();
     }
   }, [token, loadThreadData]);
+
+  // Persist user timezone once inferred from browser
+  useEffect(() => {
+    if (token && !isPartner) {
+      const detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      fetch('/api/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ timezone: detectedTimezone }),
+      }).catch((e) => console.warn('Could not sync timezone:', e));
+    }
+  }, [token, isPartner]);
+
+  // Journal entries loader
+  const loadJournalEntries = async () => {
+    if (!token || isPartner) return;
+    try {
+      const res = await fetch('/api/journal', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setJournalEntries(data.entries || []);
+      }
+    } catch (err) {
+      console.error('Error loading journal entries:', err);
+    }
+  };
+
+  const handleAddJournalEntry = async (text: string, title?: string, tags?: string[]) => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/journal', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text, title, tags }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.entry) {
+          setJournalEntries((prev) => [data.entry, ...prev]);
+        }
+      }
+    } catch (err) {
+      console.error('Error adding journal entry:', err);
+    }
+  };
+
+  const handleDeleteJournalEntry = async (id: string) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`/api/journal/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setJournalEntries((prev) => prev.filter((e) => e.id !== id));
+      }
+    } catch (err) {
+      console.error('Error deleting journal entry:', err);
+    }
+  };
+
+  // Permanent Add Task: writes through exact same backend endpoint
+  const handleAddTask = async (taskData: {
+    name: string;
+    dueAt?: string;
+    consequenceType?: ConsequenceType;
+  }) => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(taskData),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.task) {
+          setTasks((prev) => [data.task, ...prev]);
+        }
+        await loadThreadData();
+      }
+    } catch (err) {
+      console.error('Error adding task:', err);
+    }
+  };
+
+  // Permanent Edit Task: changes due date/time or name directly
+  const handleUpdateTask = async (
+    taskId: string,
+    updates: {
+      name?: string;
+      dueAt?: string;
+      consequenceType?: ConsequenceType;
+    }
+  ) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(updates),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.task) {
+          setTasks((prev) =>
+            prev.map((t) => (t.id === taskId ? data.task : t))
+          );
+        }
+        await loadThreadData();
+      }
+    } catch (err) {
+      console.error('Error updating task:', err);
+    }
+  };
 
   // Send message in thread
   const handleSendMessage = async (text: string) => {
@@ -130,7 +270,11 @@ export function App() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: text,
+          clientTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          clientOffsetMinutes: new Date().getTimezoneOffset(),
+        }),
       });
 
       if (res.ok) {
@@ -183,7 +327,7 @@ export function App() {
     }
   };
 
-  // Stage 3: Shame-Free Task Release (Amnesty)
+  // Stage 3: Task Release (Amnesty)
   const handleReleaseTask = async (taskId: string) => {
     if (!token) return;
     try {
@@ -461,6 +605,11 @@ export function App() {
                 onMarkTaskDone={handleMarkTaskDone}
                 onReleaseTask={handleReleaseTask}
                 onCheckInTask={handleCheckInTask}
+                onAddTask={handleAddTask}
+                onUpdateTask={handleUpdateTask}
+                journalEntries={journalEntries}
+                onAddJournalEntry={handleAddJournalEntry}
+                onDeleteJournalEntry={handleDeleteJournalEntry}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenPartner={() => setIsPartnerModalOpen(true)}
                 isLoading={loadingData}

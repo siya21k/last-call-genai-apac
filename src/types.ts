@@ -19,6 +19,7 @@ export interface Task {
   lastGuaranteedNudgeAt?: string | null;
   lastEscalationNudgeAt?: string | null;
   createdAt: string;
+  completedAt?: string | null;
 }
 
 export interface TaskEntry {
@@ -37,9 +38,27 @@ export interface LogEntry {
   createdAt: string;
 }
 
+export interface JournalEntry {
+  id: string;
+  text: string;
+  title?: string | null;
+  link?: string | null;
+  tags?: string[];
+  createdAt: string;
+}
+
+export interface DailyStripItem {
+  id?: string;
+  type: 'task' | 'log';
+  text: string;
+  time?: string;
+  timestamp?: string;
+}
+
 export interface DailyStrip {
   date: string;
   line: string;
+  items?: DailyStripItem[];
 }
 
 export interface ThreadMessage {
@@ -73,4 +92,38 @@ export interface UserProfile {
   ownerUid?: string | null;
   anchorTimes?: AnchorTimes;
   notificationToken?: string;
+  timezone?: string;
+}
+
+export type RelativeDaySignal =
+  | 'today'
+  | 'tomorrow'
+  | 'in_N_days'
+  | 'next_week'
+  | 'next_monday'
+  | 'next_tuesday'
+  | 'next_wednesday'
+  | 'next_thursday'
+  | 'next_friday'
+  | 'next_saturday'
+  | 'next_sunday'
+  | 'specific_date'
+  | 'unspecified';
+
+export type AnchorPhraseSignal =
+  | 'before_work'
+  | 'after_work'
+  | 'before_sleep'
+  | 'lunch'
+  | 'none';
+
+export interface TaskCreationSignals {
+  name: string;
+  relativeDay: RelativeDaySignal;
+  relativeDayCount?: number | null;
+  specificDate?: string | null;
+  explicitTime?: string | null;
+  anchorPhrase?: AnchorPhraseSignal | null;
+  consequenceType: ConsequenceType;
+  systemConfirmation?: string;
 }

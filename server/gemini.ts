@@ -1,5 +1,10 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import type { ConsequenceType, AnchorTimes } from '../src/types';
+import type {
+  ConsequenceType,
+  AnchorTimes,
+  RelativeDaySignal,
+  AnchorPhraseSignal,
+} from '../src/types';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -96,10 +101,14 @@ export interface ClassifiedMessageResult {
   intent: 'task-creation' | 'log-entry' | 'check-in' | 'correction' | 'conversation';
   taskCreation?: {
     name: string;
-    dueAt: string;
-    anchorPhrase: string | null;
+    relativeDay: RelativeDaySignal;
+    relativeDayCount?: number | null;
+    specificDate?: string | null;
+    explicitTime?: string | null;
+    anchorPhrase?: AnchorPhraseSignal | null;
     consequenceType: ConsequenceType;
-    systemConfirmation: string;
+    systemConfirmation?: string;
+    dueAt: string; // Deterministically computed by backend date-math!
   };
   logEntryMatch?: {
     matchedTaskId: string | null;
@@ -121,6 +130,8 @@ export interface ClassifiedMessageResult {
 
 /**
  * Message Router Schema (Single extraction call covering intent classification and routing)
+ * NOTE: The extraction schema returns structural signals ONLY.
+ * Gemini NEVER calculates an absolute datetime or ISO timestamp.
  */
 const MESSAGE_CLASSIFIER_SCHEMA = {
   type: Type.OBJECT,
@@ -134,19 +145,53 @@ const MESSAGE_CLASSIFIER_SCHEMA = {
       type: Type.OBJECT,
       properties: {
         name: { type: Type.STRING, description: 'Clean concise task title' },
-        dueAt: { type: Type.STRING, description: 'ISO-8601 string for deadline calculated against current time' },
-        anchorPhrase: { type: Type.STRING, description: 'Raw phrase used e.g. "before lunch", "tomorrow 5pm"' },
+        relativeDay: {
+          type: Type.STRING,
+          enum: [
+            'today',
+            'tomorrow',
+            'in_N_days',
+            'next_week',
+            'next_monday',
+            'next_tuesday',
+            'next_wednesday',
+            'next_thursday',
+            'next_friday',
+            'next_saturday',
+            'next_sunday',
+            'specific_date',
+            'unspecified',
+          ],
+          description: 'Structural relative day indicator (today, tomorrow, in_N_days, next_week, next_<weekday>, specific_date, or unspecified).',
+        },
+        relativeDayCount: {
+          type: Type.INTEGER,
+          description: 'Number of days N if relativeDay is in_N_days (e.g. 2, 3, 5). Null otherwise.',
+        },
+        specificDate: {
+          type: Type.STRING,
+          description: 'Specific date string (YYYY-MM-DD) if relativeDay is specific_date. Null otherwise.',
+        },
+        explicitTime: {
+          type: Type.STRING,
+          description: 'Explicit clock time mentioned in 24-hour "HH:MM" (e.g. "14:00", "09:30", "17:00"), or null if no explicit clock time was given.',
+        },
+        anchorPhrase: {
+          type: Type.STRING,
+          enum: ['before_work', 'after_work', 'before_sleep', 'lunch', 'none'],
+          description: 'Structural anchor phrase: before_work, after_work, before_sleep, lunch, or none.',
+        },
         consequenceType: {
           type: Type.STRING,
           enum: ['hard', 'soft', 'unspecified'],
-          description: 'hard if hard deadline with real penalties (taxes, flight, bills), soft if flexible/personal habit, unspecified if ambiguous.',
+          description: 'hard if hard deadline with real external consequences (taxes, flight, bills), soft if flexible personal habit, unspecified if ambiguous.',
         },
         systemConfirmation: {
           type: Type.STRING,
-          description: 'Brief system style confirmation strictly under 60 characters e.g. "Set task \'Pay electric bill\' due tomorrow at 8:30 AM."',
+          description: 'Brief system style confirmation strictly under 60 characters e.g. "Set task \'Pay electric bill\'."',
         },
       },
-      required: ['name', 'dueAt'],
+      required: ['name', 'relativeDay', 'consequenceType'],
     },
     logEntryMatch: {
       type: Type.OBJECT,
@@ -216,6 +261,8 @@ export async function classifyAndExtractMessage(
   userMessage: string,
   context: {
     nowIso: string;
+    clientTimezone?: string;
+    clientOffsetMinutes?: number;
     anchorTimes?: AnchorTimes;
     openTasks?: Array<{ id: string; name: string; dueAt: string; consequenceType: string }>;
     lastSystemMessage?: { text: string; relatedTaskId?: string | null; messageType?: string } | null;
@@ -232,9 +279,12 @@ export async function classifyAndExtractMessage(
     .map((t) => `- ID: "${t.id}", Name: "${t.name}", Due: ${t.dueAt}, Consequence: ${t.consequenceType}`)
     .join('\n');
 
+  const tzInfo = context.clientTimezone ? `User Timezone: ${context.clientTimezone} (UTC offset: ${context.clientOffsetMinutes !== undefined ? -context.clientOffsetMinutes : 0} minutes)` : 'User Timezone: UTC';
+
   const systemInstruction = `You are "Last Call", an ADHD task-initiation and focus assistant.
-Current ISO Time: ${context.nowIso}
-User Anchor Times: Before Work (${defaultAnchorTimes.beforeWork}), Midday/Lunch (12:00), After Work (${defaultAnchorTimes.afterWork}), Before Sleep (${defaultAnchorTimes.beforeSleep}).
+Current ISO Time (UTC): ${context.nowIso}
+${tzInfo}
+User Anchor Times (in user local time): Before Work (${defaultAnchorTimes.beforeWork}), Midday/Lunch (12:00), After Work (${defaultAnchorTimes.afterWork}), Before Sleep (${defaultAnchorTimes.beforeSleep}).
 
 Open Tasks Context:
 ${openTasksList || '(No current open tasks on the board)'}
@@ -243,18 +293,17 @@ Previous System Message: ${context.lastSystemMessage ? `"${context.lastSystemMes
 
 Classify the incoming user message into EXACTLY ONE intent:
 1. "task-creation": The user states a task to do in the future (e.g. "submit taxes Friday 5pm", "call mom after work", "buy groceries", "pay electric bill next week", "submit project before lunch tomorrow").
-   - Infer "name", "dueAt" (ISO string), "anchorPhrase", "consequenceType" ('hard'|'soft'|'unspecified') silently from wording.
-   - NEVER ask a follow-up question to classify it.
-   - CRITICAL: Compute the EXACT future ISO-8601 string for "dueAt":
-     * "tomorrow": next calendar day matching user anchor time (or 08:30 if unspecified).
-     * "before lunch" / "by lunch" / "tomorrow lunch" / "noon": 12:00.
-     * "after work": 17:30 (or user anchor afterWork).
-     * "before bed" / "tonight": 23:00 (or user anchor beforeSleep).
-     * "next week": exactly 7 days after Current ISO Time.
-     * "in X days" / "in X hours": current time plus X days/hours.
-     * Specific days (e.g. "Friday 5pm"): next occurrence of that weekday at that time.
-   - "dueAt" MUST ALWAYS be a valid ISO-8601 datetime in the future.
-   - Provide a brief inline system confirmation (e.g. "Set task 'Pay electric bill' due next Monday.").
+   - Extract structural signals ONLY. NEVER compute an absolute datetime or ISO-8601 string.
+   - Extract:
+     * "name": Clean concise task title without time anchors or filler.
+     * "relativeDay": 'today' | 'tomorrow' | 'in_N_days' | 'next_week' | 'next_monday' | 'next_tuesday' | 'next_wednesday' | 'next_thursday' | 'next_friday' | 'next_saturday' | 'next_sunday' | 'specific_date' | 'unspecified'
+     * "relativeDayCount": Integer N if relativeDay is in_N_days (e.g. 2, 3), null otherwise.
+     * "specificDate": 'YYYY-MM-DD' if user states an explicit calendar date (e.g. "October 12th"), null otherwise.
+     * "explicitTime": 'HH:MM' 24-hour clock string if user gives a specific time (e.g. "5pm" -> "17:00", "2:30pm" -> "14:30", "9am" -> "09:00"), null if no clock time.
+     * "anchorPhrase": 'before_work' | 'after_work' | 'before_sleep' | 'lunch' | 'none'
+     * "consequenceType": 'hard' | 'soft' | 'unspecified'
+   - NEVER ask a follow-up question.
+   - Provide a brief inline system confirmation (e.g. "Set task 'Pay electric bill'.").
 
 2. "log-entry": The user says they completed or worked on something (e.g. "finished laundry", "just called the vet", "done with the quarterly report", "sent the email to dave").
    - Compare the user's action against Open Tasks by semantic similarity:
@@ -284,16 +333,13 @@ Return valid JSON strictly matching the schema.`;
       responseMimeType: 'application/json',
       responseSchema: MESSAGE_CLASSIFIER_SCHEMA,
       temperature: 0.1,
-      maxOutputTokens: 300,
+      maxOutputTokens: 1024,
     });
 
     console.log(`[Gemini Classifier] Raw model extraction response for "${userMessage}":\n`, rawJson);
     const candidate = parseJsonSafely(rawJson);
     if (candidate && candidate.intent) {
       parsed = candidate;
-      if (candidate.taskCreation?.dueAt) {
-        console.log(`[Gemini Classifier] Successfully inferred dueAt: ${candidate.taskCreation.dueAt}`);
-      }
     }
   } catch (primaryErr: any) {
     console.warn('[Gemini Classifier] Primary extraction failed or produced invalid JSON:', primaryErr?.message || primaryErr);
@@ -310,31 +356,38 @@ Return valid JSON strictly matching the schema.`;
         responseMimeType: 'application/json',
         responseSchema: MESSAGE_CLASSIFIER_SCHEMA,
         temperature: 0.0,
-        maxOutputTokens: 250,
+        maxOutputTokens: 1024,
       });
 
       console.log(`[Gemini Classifier] Retry extraction response:\n`, retryJson);
       const retryCandidate = parseJsonSafely(retryJson);
       if (retryCandidate && retryCandidate.intent) {
         parsed = retryCandidate;
-        if (retryCandidate.taskCreation?.dueAt) {
-          console.log(`[Gemini Classifier] Retry inferred dueAt: ${retryCandidate.taskCreation.dueAt}`);
-        }
       }
     } catch (retryErr: any) {
       console.warn('[Gemini Classifier] Retry extraction failed:', retryErr?.message || retryErr);
     }
   }
 
-  // If successfully parsed, sanitize confirmation string to prevent any degenerate repetition
+  // If successfully parsed, calculate deterministic dueAt from extracted structural signals
   if (parsed && parsed.intent) {
-    if (parsed.taskCreation?.systemConfirmation) {
-      if (
-        parsed.taskCreation.systemConfirmation.length > 100 ||
-        hasDegenerateRepetition(parsed.taskCreation.systemConfirmation)
-      ) {
-        parsed.taskCreation.systemConfirmation = `Set task '${parsed.taskCreation.name}' due tomorrow.`;
-      }
+    if (parsed.taskCreation) {
+      const computed = computeDeterministicDueAt(
+        {
+          relativeDay: parsed.taskCreation.relativeDay,
+          relativeDayCount: parsed.taskCreation.relativeDayCount,
+          specificDate: parsed.taskCreation.specificDate,
+          explicitTime: parsed.taskCreation.explicitTime,
+          anchorPhrase: parsed.taskCreation.anchorPhrase,
+        },
+        {
+          timezone: context.clientTimezone,
+          anchorTimes: context.anchorTimes,
+          now: new Date(context.nowIso),
+        }
+      );
+      parsed.taskCreation.dueAt = computed.dueAt;
+      parsed.taskCreation.systemConfirmation = `Set task '${parsed.taskCreation.name}' due ${computed.formattedLabel}.`;
     }
     return parsed;
   }
@@ -344,78 +397,219 @@ Return valid JSON strictly matching the schema.`;
   return buildDeterministicFallback(userMessage, context);
 }
 
-function computeRelativeDueAt(
-  lowerText: string,
-  nowIso: string,
-  anchorTimes?: AnchorTimes
-): { dueAt: string; anchorPhrase: string | null; confirmationLabel: string } {
-  const now = new Date(nowIso || Date.now());
-  const due = new Date(now.getTime());
-  const safeAnchor: AnchorTimes = anchorTimes || {
+export function getZonedParts(date: Date, timeZone?: string) {
+  const tz = timeZone || 'UTC';
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      weekday: 'short',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(date);
+    const getPart = (type: string) => parts.find((p) => p.type === type)?.value || '';
+
+    let hour = parseInt(getPart('hour'), 10);
+    if (hour === 24) hour = 0;
+
+    return {
+      year: parseInt(getPart('year'), 10),
+      month: parseInt(getPart('month'), 10),
+      day: parseInt(getPart('day'), 10),
+      weekday: getPart('weekday'),
+      hour,
+      minute: parseInt(getPart('minute'), 10),
+    };
+  } catch {
+    return {
+      year: date.getUTCFullYear(),
+      month: date.getUTCMonth() + 1,
+      day: date.getUTCDate(),
+      weekday: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getUTCDay()],
+      hour: date.getUTCHours(),
+      minute: date.getUTCMinutes(),
+    };
+  }
+}
+
+export function zonedDateTimeToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone?: string
+): Date {
+  const tz = timeZone || 'UTC';
+  try {
+    const guess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+    const parts = getZonedParts(guess, tz);
+    const testLocalAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, 0);
+    const targetLocalAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0);
+    const diff = targetLocalAsUtc - testLocalAsUtc;
+    return new Date(guess.getTime() + diff);
+  } catch {
+    return new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  }
+}
+
+export function computeDeterministicDueAt(
+  signals: {
+    relativeDay?: string | null;
+    relativeDayCount?: number | null;
+    specificDate?: string | null;
+    explicitTime?: string | null;
+    anchorPhrase?: string | null;
+  },
+  options: {
+    timezone?: string;
+    anchorTimes?: AnchorTimes;
+    now?: Date;
+  } = {}
+): { dueAt: string; formattedLabel: string; anchorPhraseUsed: string | null } {
+  const timezone = options.timezone || 'UTC';
+  const now = options.now || new Date();
+  const safeAnchor: AnchorTimes = {
     beforeWork: '08:30',
     afterWork: '17:30',
     beforeSleep: '23:00',
+    ...(options.anchorTimes || {}),
   };
 
-  if (lowerText.includes('next week')) {
-    due.setDate(due.getDate() + 7);
-    return { dueAt: due.toISOString(), anchorPhrase: 'next week', confirmationLabel: 'next week' };
-  }
-  if (lowerText.includes('in 2 days') || lowerText.includes('two days')) {
-    due.setDate(due.getDate() + 2);
-    return { dueAt: due.toISOString(), anchorPhrase: 'in 2 days', confirmationLabel: 'in 2 days' };
-  }
-  if (lowerText.includes('in 3 days') || lowerText.includes('three days')) {
-    due.setDate(due.getDate() + 3);
-    return { dueAt: due.toISOString(), anchorPhrase: 'in 3 days', confirmationLabel: 'in 3 days' };
-  }
-  if (lowerText.includes('tomorrow')) {
-    due.setDate(due.getDate() + 1);
-    if (lowerText.includes('lunch') || lowerText.includes('noon')) {
-      due.setHours(12, 0, 0, 0);
-      return { dueAt: due.toISOString(), anchorPhrase: 'tomorrow lunch', confirmationLabel: 'tomorrow by lunch' };
+  const nowParts = getZonedParts(now, timezone);
+
+  // 1. Resolve day offset
+  let dayOffset = 1;
+  const relDay = (signals.relativeDay || 'unspecified').toLowerCase();
+
+  if (relDay === 'today') {
+    dayOffset = 0;
+  } else if (relDay === 'tomorrow') {
+    dayOffset = 1;
+  } else if (relDay === 'in_n_days') {
+    dayOffset = signals.relativeDayCount && signals.relativeDayCount > 0 ? signals.relativeDayCount : 2;
+  } else if (relDay === 'next_week') {
+    dayOffset = 7;
+  } else if (relDay.startsWith('next_')) {
+    const weekdayName = relDay.replace('next_', '');
+    const weekdays: Record<string, number> = {
+      sunday: 0,
+      monday: 1,
+      tuesday: 2,
+      wednesday: 3,
+      thursday: 4,
+      friday: 5,
+      saturday: 6,
+    };
+    const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const currentDow = dowNames.indexOf(nowParts.weekday);
+    const targetDow = weekdays[weekdayName] !== undefined ? weekdays[weekdayName] : -1;
+    if (targetDow !== -1 && currentDow !== -1) {
+      let diff = (targetDow - currentDow + 7) % 7;
+      if (diff === 0) diff = 7;
+      dayOffset = diff;
+    } else {
+      dayOffset = 7;
     }
-    if (lowerText.includes('after work')) {
-      const [h, m] = (safeAnchor.afterWork || '17:30').split(':').map(Number);
-      due.setHours(h || 17, m || 30, 0, 0);
-      return { dueAt: due.toISOString(), anchorPhrase: 'tomorrow after work', confirmationLabel: 'tomorrow after work' };
-    }
-    if (lowerText.includes('before sleep') || lowerText.includes('night') || lowerText.includes('bed')) {
-      const [h, m] = (safeAnchor.beforeSleep || '23:00').split(':').map(Number);
-      due.setHours(h || 23, m || 0, 0, 0);
-      return { dueAt: due.toISOString(), anchorPhrase: 'tomorrow night', confirmationLabel: 'tomorrow before bed' };
-    }
-    const [h, m] = (safeAnchor.beforeWork || '08:30').split(':').map(Number);
-    due.setHours(h || 8, m || 30, 0, 0);
-    return { dueAt: due.toISOString(), anchorPhrase: 'tomorrow', confirmationLabel: 'tomorrow' };
-  }
-  if (lowerText.includes('lunch') || lowerText.includes('noon')) {
-    due.setHours(12, 0, 0, 0);
-    if (due.getTime() <= now.getTime()) due.setDate(due.getDate() + 1);
-    return { dueAt: due.toISOString(), anchorPhrase: 'lunch', confirmationLabel: 'by lunch' };
-  }
-  if (lowerText.includes('after work')) {
-    const [h, m] = (safeAnchor.afterWork || '17:30').split(':').map(Number);
-    due.setHours(h || 17, m || 30, 0, 0);
-    if (due.getTime() <= now.getTime()) due.setDate(due.getDate() + 1);
-    return { dueAt: due.toISOString(), anchorPhrase: 'after work', confirmationLabel: 'after work' };
-  }
-  if (lowerText.includes('tonight') || lowerText.includes('before sleep') || lowerText.includes('before bed')) {
-    const [h, m] = (safeAnchor.beforeSleep || '23:00').split(':').map(Number);
-    due.setHours(h || 23, m || 0, 0, 0);
-    if (due.getTime() <= now.getTime()) due.setDate(due.getDate() + 1);
-    return { dueAt: due.toISOString(), anchorPhrase: 'tonight', confirmationLabel: 'tonight' };
   }
 
-  // Default: 24 hours from now
-  due.setTime(due.getTime() + 24 * 3600 * 1000);
-  return { dueAt: due.toISOString(), anchorPhrase: null, confirmationLabel: 'tomorrow' };
+  // 2. Resolve time (HH:MM)
+  let timeStr = '09:00';
+  let anchorPhraseUsed: string | null = null;
+
+  const rawAnchor = (signals.anchorPhrase || '').toLowerCase();
+  if (rawAnchor.includes('before_work') || rawAnchor.includes('before work')) {
+    timeStr = safeAnchor.beforeWork || '08:30';
+    anchorPhraseUsed = 'before work';
+  } else if (rawAnchor.includes('after_work') || rawAnchor.includes('after work')) {
+    timeStr = safeAnchor.afterWork || '17:30';
+    anchorPhraseUsed = 'after work';
+  } else if (
+    rawAnchor.includes('before_sleep') ||
+    rawAnchor.includes('before sleep') ||
+    rawAnchor.includes('bed') ||
+    rawAnchor.includes('night')
+  ) {
+    timeStr = safeAnchor.beforeSleep || '23:00';
+    anchorPhraseUsed = 'before sleep';
+  } else if (rawAnchor.includes('lunch') || rawAnchor.includes('noon')) {
+    timeStr = '12:00';
+    anchorPhraseUsed = 'lunch';
+  } else if (signals.explicitTime && /^\d{1,2}:\d{2}$/.test(signals.explicitTime.trim())) {
+    timeStr = signals.explicitTime.trim();
+  }
+
+  const [rawH, rawM] = timeStr.split(':').map((s) => parseInt(s, 10));
+  const h = isNaN(rawH) ? 9 : rawH;
+  const m = isNaN(rawM) ? 0 : rawM;
+
+  // 3. Resolve target calendar date in user's timezone
+  let resolvedYear: number;
+  let resolvedMonth: number;
+  let resolvedDay: number;
+
+  if (relDay === 'specific_date' && signals.specificDate && /^\d{4}-\d{2}-\d{2}$/.test(signals.specificDate)) {
+    const [sy, sm, sd] = signals.specificDate.split('-').map(Number);
+    resolvedYear = sy;
+    resolvedMonth = sm;
+    resolvedDay = sd;
+  } else {
+    // Add dayOffset days to user local date
+    const targetDateInLocal = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day + dayOffset));
+    resolvedYear = targetDateInLocal.getUTCFullYear();
+    resolvedMonth = targetDateInLocal.getUTCMonth() + 1;
+    resolvedDay = targetDateInLocal.getUTCDate();
+  }
+
+  let targetUtc = zonedDateTimeToUtc(resolvedYear, resolvedMonth, resolvedDay, h, m, timezone);
+
+  // If relDay was 'today' and time is already past, advance by 1 day
+  if (relDay === 'today' && targetUtc.getTime() <= now.getTime()) {
+    const rolledLocal = new Date(Date.UTC(nowParts.year, nowParts.month - 1, nowParts.day + 1));
+    targetUtc = zonedDateTimeToUtc(
+      rolledLocal.getUTCFullYear(),
+      rolledLocal.getUTCMonth() + 1,
+      rolledLocal.getUTCDate(),
+      h,
+      m,
+      timezone
+    );
+    dayOffset = 1;
+  }
+
+  // Format label
+  const hour12 = h % 12 || 12;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const timeFormatted = `${hour12}:${String(m).padStart(2, '0')} ${ampm}`;
+
+  let dayLabel = 'tomorrow';
+  if (dayOffset === 0) dayLabel = 'today';
+  else if (dayOffset === 1) dayLabel = 'tomorrow';
+  else if (dayOffset === 7) dayLabel = 'next week';
+  else if (dayOffset > 1) dayLabel = `in ${dayOffset} days`;
+
+  const formattedLabel = anchorPhraseUsed
+    ? `${dayLabel} (${anchorPhraseUsed}, ${timeFormatted})`
+    : `${dayLabel} at ${timeFormatted}`;
+
+  return {
+    dueAt: targetUtc.toISOString(),
+    formattedLabel,
+    anchorPhraseUsed,
+  };
 }
 
 function buildDeterministicFallback(
   userMessage: string,
   context: {
     nowIso: string;
+    clientTimezone?: string;
+    clientOffsetMinutes?: number;
     anchorTimes?: AnchorTimes;
     openTasks?: Array<{ id: string; name: string; dueAt: string; consequenceType: string }>;
   }
@@ -498,15 +692,54 @@ function buildDeterministicFallback(
     const cleanName =
       userMessage.replace(/\b(before work|after work|before sleep|tomorrow|today|next week|at \d+:?\d*|\b(am|pm)\b)/gi, '').trim() ||
       userMessage;
-    const computed = computeRelativeDueAt(lower, context.nowIso, context.anchorTimes);
+
+    let relativeDay: RelativeDaySignal = 'tomorrow';
+    let relativeDayCount: number | null = null;
+    let anchorPhrase: AnchorPhraseSignal = 'none';
+    let explicitTime: string | null = null;
+
+    if (lower.includes('today') || lower.includes('tonight')) relativeDay = 'today';
+    else if (lower.includes('tomorrow')) relativeDay = 'tomorrow';
+    else if (lower.includes('next week')) relativeDay = 'next_week';
+    else if (lower.includes('in 2 days') || lower.includes('two days')) {
+      relativeDay = 'in_N_days';
+      relativeDayCount = 2;
+    } else if (lower.includes('in 3 days') || lower.includes('three days')) {
+      relativeDay = 'in_N_days';
+      relativeDayCount = 3;
+    }
+
+    if (lower.includes('before work')) anchorPhrase = 'before_work';
+    else if (lower.includes('after work')) anchorPhrase = 'after_work';
+    else if (lower.includes('before sleep') || lower.includes('night') || lower.includes('bed')) anchorPhrase = 'before_sleep';
+    else if (lower.includes('lunch') || lower.includes('noon')) anchorPhrase = 'lunch';
+
+    const timeMatch = lower.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+    if (timeMatch) {
+      let h = parseInt(timeMatch[1], 10);
+      const m = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+      const ampm = timeMatch[3].toLowerCase();
+      if (ampm === 'pm' && h < 12) h += 12;
+      if (ampm === 'am' && h === 12) h = 0;
+      explicitTime = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+
+    const computed = computeDeterministicDueAt(
+      { relativeDay, relativeDayCount, explicitTime, anchorPhrase },
+      { timezone: context.clientTimezone, anchorTimes: context.anchorTimes, now: new Date(context.nowIso) }
+    );
+
     return {
       intent: 'task-creation',
       taskCreation: {
         name: cleanName,
-        dueAt: computed.dueAt,
-        anchorPhrase: computed.anchorPhrase,
+        relativeDay,
+        relativeDayCount,
+        explicitTime,
+        anchorPhrase,
         consequenceType: 'unspecified',
-        systemConfirmation: `Set task '${cleanName}' due ${computed.confirmationLabel}.`,
+        dueAt: computed.dueAt,
+        systemConfirmation: `Set task '${cleanName}' due ${computed.formattedLabel}.`,
       },
     };
   }

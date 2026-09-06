@@ -169,7 +169,7 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
               <Eye className="w-3.5 h-3.5 text-indigo-600" />
               <span>Strict Privacy Isolation (RBAC)</span>
             </div>
-            Your partner can <strong>ONLY</strong> read the aggregate status summary (streak, current focus risk level, and next deadline name). They have zero access to your check-in chats, avoidance locations, or personal entries.
+            Your partner can <strong>ONLY</strong> read the aggregate status summary (current focus risk level and next deadline name). They have zero access to your check-in chats, avoidance locations, or personal entries.
           </div>
 
           {loading ? (
@@ -282,7 +282,7 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
               </div>
 
               <div className="text-[11px] text-stone-500 leading-snug">
-                You can invite exactly one accountability partner. They will only see your focus status and streak to support your deadlines.
+                You can invite exactly one accountability partner. They will only see your focus status and next deadline name.
               </div>
 
               <div className="pt-2 flex justify-end">
