@@ -76,12 +76,22 @@ export interface PartnerInvite {
   email: string;
   status: PartnerInviteStatus;
   partnerUid: string | null;
+  ownerUid?: string;
+  ownerName?: string;
+  ownerEmail?: string;
   createdAt: string;
+  approvedAt?: string;
+  acceptedAt?: string;
+  declinedAt?: string;
+  revokedAt?: string;
+  updatedAt?: string;
 }
 
 export interface PartnerStatusView {
   dailyStripLine: string | null;
   hasHardConsequenceInEscalationWindow: boolean;
+  ownerName?: string;
+  ownerUid?: string;
 }
 
 export interface UserProfile {

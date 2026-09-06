@@ -8,6 +8,9 @@ interface HeaderProps {
   onLogout: () => void;
   onOpenPartnerModal: () => void;
   isPartnerMode?: boolean;
+  activeMainView?: 'thread' | 'partner';
+  onSwitchView?: (view: 'thread' | 'partner') => void;
+  partnerOwnerName?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,6 +19,9 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
   onOpenPartnerModal,
   isPartnerMode = false,
+  activeMainView = 'thread',
+  onSwitchView,
+  partnerOwnerName,
 }) => {
   return (
     <header className="sticky top-0 z-30 px-3 sm:px-6 pt-2 pb-1 select-none">
@@ -50,21 +56,44 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2">
           {user ? (
             <>
-              {isPartnerMode ? (
-                <div className="px-3 py-1 rounded-xl bg-[#52b7aa]/30 border-2 border-[#2d2825] text-xs font-bold text-[#2d2825] flex items-center gap-1.5">
-                  <UserCheck className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>Partner: {user.ownerUid?.slice(0, 6)}...</span>
+              {isPartnerMode && (
+                <div className="hidden sm:flex items-center gap-1 bg-[#faf4e8] p-0.5 rounded-xl border-2 border-[#2d2825]">
+                  <button
+                    id="header-thread-view-btn"
+                    type="button"
+                    onClick={() => onSwitchView?.('thread')}
+                    className={`px-2.5 py-1 text-xs font-extrabold rounded-lg transition-all ${
+                      activeMainView === 'thread'
+                        ? 'bg-[#f5b638] text-[#2d2825] shadow-[1px_1px_0px_#2d2825]'
+                        : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    My Thread
+                  </button>
+                  <button
+                    id="header-partner-view-btn"
+                    type="button"
+                    onClick={() => onSwitchView?.('partner')}
+                    className={`px-2.5 py-1 text-xs font-extrabold rounded-lg flex items-center gap-1 transition-all ${
+                      activeMainView === 'partner'
+                        ? 'bg-[#52b7aa] text-white shadow-[1px_1px_0px_#2d2825]'
+                        : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    <UserCheck className="w-3 h-3 stroke-[2.5]" />
+                    <span>Partner Monitor</span>
+                  </button>
                 </div>
-              ) : (
-                <button
-                  onClick={onOpenPartnerModal}
-                  className="retro-btn px-3 py-1.5 text-xs flex items-center gap-1.5 font-bold bg-[#fffdf9]"
-                  title="Manage Accountability Partner"
-                >
-                  <Shield className="w-3.5 h-3.5 text-[#2d2825] stroke-[2.5]" />
-                  <span className="hidden sm:inline">Partner</span>
-                </button>
               )}
+
+              <button
+                onClick={onOpenPartnerModal}
+                className="retro-btn px-2.5 sm:px-3 py-1.5 text-xs flex items-center gap-1.5 font-bold bg-[#fffdf9]"
+                title="Manage Accountability Partner"
+              >
+                <Shield className="w-3.5 h-3.5 text-[#2d2825] stroke-[2.5]" />
+                <span className="hidden sm:inline">Partner</span>
+              </button>
 
               <div className="flex items-center gap-2 pl-2 border-l-2 border-[#2d2825]">
                 <div className="w-7 h-7 rounded-xl border-2 border-[#2d2825] bg-[#fca5b0] text-[#2d2825] flex items-center justify-center text-xs font-bold overflow-hidden shadow-[1.5px_1.5px_0px_#2d2825]">

@@ -13,6 +13,7 @@ import {
   Pencil,
   X,
   Trash2,
+  UserCheck,
 } from 'lucide-react';
 import type { Task, JournalEntry, ConsequenceType } from '../types';
 import { MascotFlower, CompletionRewardIcon, getRandomRewardType, type RewardType } from './Mascot';
@@ -41,6 +42,10 @@ interface SidePanelProps {
   onOpenSettings: () => void;
   onOpenPartner: () => void;
   isLoading: boolean;
+  isPartner?: boolean;
+  activeMainView?: 'thread' | 'partner';
+  onSwitchToPartnerView?: () => void;
+  onSwitchToThreadView?: () => void;
 }
 
 export const SidePanel: React.FC<SidePanelProps> = ({
@@ -56,6 +61,10 @@ export const SidePanel: React.FC<SidePanelProps> = ({
   onOpenSettings,
   onOpenPartner,
   isLoading,
+  isPartner = false,
+  activeMainView = 'thread',
+  onSwitchToPartnerView,
+  onSwitchToThreadView,
 }) => {
   const [activeTab, setActiveTab] = useState<'tasks' | 'journal'>('tasks');
   const [taskFilter, setTaskFilter] = useState<'pending' | 'completed' | 'all'>('pending');
@@ -292,13 +301,19 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
       {/* Retro Rounded Tabs */}
       <div className="flex items-center justify-between gap-2 mb-2 select-none">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Tasks Tab */}
           <button
+            id="sidepanel-tasks-tab"
             type="button"
-            onClick={() => setActiveTab('tasks')}
+            onClick={() => {
+              setActiveTab('tasks');
+              if (activeMainView === 'partner' && onSwitchToThreadView) {
+                onSwitchToThreadView();
+              }
+            }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 border-[#2d2825] text-xs font-extrabold transition-all ${
-              activeTab === 'tasks'
+              activeTab === 'tasks' && activeMainView !== 'partner'
                 ? 'bg-[#f5b638] text-[#2d2825] shadow-[2px_2px_0px_#2d2825] translate-x-[-1px] translate-y-[-1px]'
                 : 'bg-[#faf4e8] text-stone-600 hover:bg-[#fffdf9]'
             }`}
@@ -312,10 +327,16 @@ export const SidePanel: React.FC<SidePanelProps> = ({
 
           {/* Journal Tab */}
           <button
+            id="sidepanel-journal-tab"
             type="button"
-            onClick={() => setActiveTab('journal')}
+            onClick={() => {
+              setActiveTab('journal');
+              if (activeMainView === 'partner' && onSwitchToThreadView) {
+                onSwitchToThreadView();
+              }
+            }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 border-[#2d2825] text-xs font-extrabold transition-all ${
-              activeTab === 'journal'
+              activeTab === 'journal' && activeMainView !== 'partner'
                 ? 'bg-[#52b7aa] text-white shadow-[2px_2px_0px_#2d2825] translate-x-[-1px] translate-y-[-1px]'
                 : 'bg-[#faf4e8] text-stone-600 hover:bg-[#fffdf9]'
             }`}
@@ -328,6 +349,27 @@ export const SidePanel: React.FC<SidePanelProps> = ({
               </span>
             )}
           </button>
+
+          {/* Partner Monitor Tab (Accessible independently without locking out thread) */}
+          {isPartner && (
+            <button
+              id="sidepanel-partner-tab"
+              type="button"
+              onClick={() => {
+                if (onSwitchToPartnerView) {
+                  onSwitchToPartnerView();
+                }
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 border-[#2d2825] text-xs font-extrabold transition-all ${
+                activeMainView === 'partner'
+                  ? 'bg-[#d97706] text-white shadow-[2px_2px_0px_#2d2825] translate-x-[-1px] translate-y-[-1px]'
+                  : 'bg-[#faf4e8] text-stone-600 hover:bg-[#fffdf9]'
+              }`}
+            >
+              <UserCheck className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Partner View</span>
+            </button>
+          )}
         </div>
       </div>
 

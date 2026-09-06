@@ -117,3 +117,25 @@
   border: 1.5px solid #2d2825;
   flex-shrink: 0;
 }
+
+/* Mascot Landing Screen Idle Eye Drift Animation (Pure CSS, 5s ease-in-out subtle loop) */
+@keyframes mascotEyeDrift {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-1.8px);
+  }
+  50% {
+    transform: translateX(0);
+  }
+  75% {
+    transform: translateX(1.8px);
+  }
+}
+
+.animate-mascot-eye-drift {
+  animation: mascotEyeDrift 5s ease-in-out infinite;
+  transform-origin: center;
+}
+

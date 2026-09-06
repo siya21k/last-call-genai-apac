@@ -5,6 +5,7 @@ interface MascotFlowerProps {
   size?: number;
   mood?: 'happy' | 'winking' | 'celebrating' | 'sleepy';
   message?: string;
+  animatedEyes?: boolean;
 }
 
 export const MascotFlower: React.FC<MascotFlowerProps> = ({
@@ -12,6 +13,7 @@ export const MascotFlower: React.FC<MascotFlowerProps> = ({
   size = 64,
   mood = 'happy',
   message,
+  animatedEyes = false,
 }) => {
   return (
     <div className={`inline-flex flex-col items-center select-none ${className}`}>
@@ -77,13 +79,13 @@ export const MascotFlower: React.FC<MascotFlowerProps> = ({
             />
           </>
         ) : (
-          <>
+          <g className={animatedEyes ? 'animate-mascot-eye-drift' : undefined}>
             {/* Open Friendly Eyes */}
             <circle cx="41" cy="46" r="2.8" fill="#2d2825" />
             <circle cx="42" cy="44.8" r="1" fill="#ffffff" />
             <circle cx="59" cy="46" r="2.8" fill="#2d2825" />
             <circle cx="60" cy="44.8" r="1" fill="#ffffff" />
-          </>
+          </g>
         )}
 
         {/* Smiling Mouth */}

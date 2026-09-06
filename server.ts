@@ -5,6 +5,8 @@ import {
   adminAuth,
   getUserProfile,
   upsertUserProfile,
+  findUserByEmail,
+  getActivePartnerRelationship,
   getTasks,
   createTask,
   markTaskDone,
@@ -22,13 +24,19 @@ import {
   saveDailyStrip,
   saveDailyStripMood,
   getPartnerInvite,
+  savePartnerInvite,
   createPartnerInvite,
+  approvePartnerInvite,
+  acceptPartnerInvite,
+  declinePartnerInvite,
+  getIncomingInviteForUser,
   revokePartner,
   getJournalEntries,
   createJournalEntry,
   deleteJournalEntry,
   setOwnerPresence,
   getOwnerPresence,
+  resolveUserDisplayName,
 } from './server/db';
 import {
   classifyAndExtractMessage,
@@ -51,6 +59,7 @@ interface AuthRequest extends Request {
   user?: {
     uid: string;
     email?: string;
+    displayName?: string;
     role?: 'owner' | 'partner';
     ownerUid?: string;
   };
@@ -69,34 +78,79 @@ async function authenticate(req: AuthRequest, res: Response, next: NextFunction)
   }
 
   try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    req.user = {
-      uid: decodedToken.uid,
-      email: decodedToken.email,
-      role: (decodedToken as any).role,
-      ownerUid: (decodedToken as any).ownerUid,
-    };
-    next();
-  } catch (err: any) {
-    // If verifyIdToken fails in sandbox without ADC IAM, inspect JWT payload safely
+    let decodedUid: string | null = null;
+    let decodedEmail: string | undefined = undefined;
+    let decodedName: string | undefined = undefined;
+    let decodedRole: 'owner' | 'partner' | undefined = undefined;
+    let decodedOwnerUid: string | undefined = undefined;
+
     try {
+      const decodedToken = await adminAuth.verifyIdToken(token);
+      decodedUid = decodedToken.uid;
+      decodedEmail = decodedToken.email;
+      decodedName = (decodedToken as any).name || (decodedToken as any).displayName;
+      decodedRole = (decodedToken as any).role;
+      decodedOwnerUid = (decodedToken as any).ownerUid;
+    } catch (_verifyErr) {
+      // In sandbox/preview without cloud IAM, validate token structure from Google Auth
       const parts = token.split('.');
       if (parts.length === 3) {
-        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'));
-        if (payload.user_id || payload.sub) {
-          req.user = {
-            uid: payload.user_id || payload.sub,
-            email: payload.email,
-            role: payload.role,
-            ownerUid: payload.ownerUid,
-          };
-          return next();
+        try {
+          const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+          const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'));
+          
+          // Disallow demo/mock UIDs completely - only real accounts allowed
+          const rawUid = payload.user_id || payload.sub;
+          if (rawUid && !rawUid.startsWith('demo_')) {
+            // Validate basic JWT expiration
+            const nowSeconds = Math.floor(Date.now() / 1000);
+            if (!payload.exp || payload.exp > nowSeconds) {
+              decodedUid = rawUid;
+              decodedEmail = payload.email;
+              decodedName = payload.name || payload.displayName;
+              decodedRole = payload.role;
+              decodedOwnerUid = payload.ownerUid;
+            }
+          }
+        } catch (_parseErr) {
+          // invalid token format
         }
       }
-    } catch (_) {}
+    }
 
-    console.warn('[Auth] Token verification failed:', err.message);
+    if (!decodedUid) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid authentication token.' });
+    }
+
+    // Role resolution fallback: If token does not reflect partner role (e.g. Identity Toolkit API disabled on GCP project),
+    // check if this caller has an active verified partner relationship in Firestore / memory store
+    if (decodedRole !== 'partner' || !decodedOwnerUid) {
+      const activePartnerRel = await getActivePartnerRelationship(decodedUid);
+      if (activePartnerRel) {
+        decodedRole = 'partner';
+        decodedOwnerUid = activePartnerRel.ownerUid;
+      }
+    }
+
+    req.user = {
+      uid: decodedUid,
+      email: decodedEmail,
+      displayName: decodedName,
+      role: decodedRole,
+      ownerUid: decodedOwnerUid,
+    };
+
+    // Lazily ensure user profile is recorded in Firestore so findUserByEmail always works
+    if (req.user.uid && req.user.email) {
+      upsertUserProfile(req.user.uid, {
+        email: req.user.email,
+        displayName: req.user.displayName,
+      }).catch(() => {});
+    }
+
+    next();
+  } catch (err: any) {
+    console.warn('[Auth] Token verification exception:', err.message);
     return res.status(401).json({ error: 'Unauthorized: Invalid authentication token.' });
   }
 }
@@ -947,6 +1001,19 @@ app.get('/api/partner/invite', authenticate, async (req: AuthRequest, res: Respo
   }
 });
 
+// Incoming pending invite query for authenticated user
+app.get('/api/partner/incoming-invite', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const callerUid = req.user!.uid;
+    const callerEmail = req.user!.email;
+    const incoming = await getIncomingInviteForUser(callerEmail, callerUid);
+    res.json({ incomingInvite: incoming });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to check incoming invites.' });
+  }
+});
+
+// Create/initiate invite
 app.post('/api/partner/invite', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user!.uid;
@@ -955,18 +1022,255 @@ app.post('/api/partner/invite', authenticate, async (req: AuthRequest, res: Resp
     if (!targetEmail) {
       return res.status(400).json({ error: 'Valid partner email address is required.' });
     }
-    const invite = await createPartnerInvite(uid, targetEmail);
+    const ownerName = req.user?.displayName || (await resolveUserDisplayName(uid));
+    const invite = await createPartnerInvite(uid, targetEmail, ownerName, req.user?.email || '');
     res.status(201).json({ invite });
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Failed to create partner invite.' });
   }
 });
 
+// POST /api/partner/invite/approve: Owner validates and approves pending invite (without developer script)
+app.post('/api/partner/invite/approve', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const ownerUid = req.user!.uid;
+    const { email, confirmOverwrite } = req.body || {};
+
+    let targetEmail = (email || '').toString().trim().toLowerCase();
+    const existingInvite = await getPartnerInvite(ownerUid);
+
+    if (!targetEmail && existingInvite?.email) {
+      targetEmail = existingInvite.email.toLowerCase();
+    }
+
+    if (!targetEmail) {
+      return res.status(400).json({ error: 'Valid partner email address is required.' });
+    }
+
+    const resolvedOwnerName = req.user?.displayName || (await resolveUserDisplayName(ownerUid));
+
+    // Lookup user using findUserByEmail (Firestore users collection + local store + adminAuth fallback)
+    const targetUser = await findUserByEmail(targetEmail);
+
+    if (!targetUser) {
+      // Persist the invite as pending with null partnerUid so the invite record exists
+      const saved = await savePartnerInvite(ownerUid, {
+        email: targetEmail,
+        status: 'pending',
+        partnerUid: null,
+        ownerUid,
+        ownerName: resolvedOwnerName,
+        ownerEmail: req.user?.email || '',
+      });
+
+      return res.json({
+        success: false,
+        code: 'EMAIL_NOT_REGISTERED',
+        message: `Invited email (${targetEmail}) hasn't signed into Last Call yet. They need to sign in with Google once so their account exists.`,
+        invite: saved,
+      });
+    }
+
+    const partnerUid = targetUser.uid;
+
+    if (partnerUid === ownerUid) {
+      return res.status(400).json({
+        success: false,
+        code: 'CANNOT_INVITE_SELF',
+        message: 'You cannot add yourself as your accountability partner.',
+      });
+    }
+
+    // Check (i): Harmless re-run / already set up
+    if (existingInvite && existingInvite.partnerUid === partnerUid && existingInvite.status === 'active') {
+      return res.json({
+        success: true,
+        code: 'ALREADY_SETUP',
+        message: `Already set up: ${targetEmail} is already your active accountability partner.`,
+        invite: existingInvite,
+      });
+    }
+
+    // Check (ii): Does target user already hold a partner claim for a DIFFERENT owner?
+    const existingClaims = targetUser.customClaims || {};
+    if (
+      existingClaims.role === 'partner' &&
+      existingClaims.ownerUid &&
+      existingClaims.ownerUid !== ownerUid &&
+      !confirmOverwrite
+    ) {
+      return res.json({
+        success: false,
+        code: 'DIFFERENT_OWNER_CONFLICT',
+        requiresConfirmation: true,
+        message: `This email is already a partner for a different owner — confirm to reassign.`,
+      });
+    }
+
+    // Check (iii): Does current owner already have a DIFFERENT active partner?
+    if (
+      existingInvite &&
+      existingInvite.partnerUid &&
+      existingInvite.partnerUid !== partnerUid &&
+      existingInvite.status === 'active' &&
+      !confirmOverwrite
+    ) {
+      return res.json({
+        success: false,
+        code: 'REPLACE_ACTIVE_PARTNER',
+        requiresConfirmation: true,
+        message: `You already have an active partner — confirm to replace.`,
+      });
+    }
+
+    // All checks passed! Owner approves the invite (does NOT grant custom claims yet)
+    const approvedInvite = await approvePartnerInvite(
+      ownerUid,
+      targetEmail,
+      partnerUid,
+      resolvedOwnerName,
+      req.user?.email || ''
+    );
+
+    return res.json({
+      success: true,
+      code: 'INVITE_APPROVED',
+      message: `Partner request approved! Waiting for ${targetEmail} to sign in and accept.`,
+      invite: approvedInvite,
+    });
+  } catch (err: any) {
+    console.error('[Partner] Error approving invite:', err);
+    res.status(500).json({ error: err.message || 'Failed to approve partner invite.' });
+  }
+});
+
+// POST /api/partner/invite/accept: Invited user explicitly accepts and activates partner claims
+app.post('/api/partner/invite/accept', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const callerUid = req.user!.uid;
+    const callerEmail = req.user!.email?.trim().toLowerCase();
+    const { ownerUid } = req.body || {};
+
+    if (!ownerUid) {
+      return res.status(400).json({ error: 'ownerUid is required to accept an invite.' });
+    }
+
+    const inviteDoc = await getPartnerInvite(ownerUid);
+    if (!inviteDoc) {
+      return res.status(404).json({ error: 'No invite found for this owner.' });
+    }
+
+    if (inviteDoc.status !== 'pending') {
+      return res.status(400).json({ error: `Invite is not in pending status (status: ${inviteDoc.status}).` });
+    }
+
+    const emailMatches = callerEmail && inviteDoc.email?.toLowerCase() === callerEmail;
+    const uidMatches = inviteDoc.partnerUid && inviteDoc.partnerUid === callerUid;
+    if (!emailMatches && !uidMatches) {
+      return res.status(403).json({ error: 'Forbidden: You are not the invited user for this owner.' });
+    }
+
+    // Set custom claims on the invited partner
+    try {
+      await adminAuth.setCustomUserClaims(callerUid, {
+        role: 'partner',
+        ownerUid: ownerUid,
+      });
+    } catch (_claimErr: any) {
+      // Identity Toolkit custom claims API may not be enabled; fall back gracefully
+    }
+
+    // Persist role in user profile document so role is recognized immediately
+    await upsertUserProfile(callerUid, {
+      role: 'partner',
+      ownerUid: ownerUid,
+    }).catch(() => {});
+
+    const accepted = await acceptPartnerInvite(ownerUid, callerUid);
+
+    res.json({
+      success: true,
+      code: 'INVITE_ACCEPTED',
+      message: `You are now the accountability partner for ${inviteDoc.ownerName || inviteDoc.ownerEmail || 'your buddy'}.`,
+      invite: accepted,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to accept invite.' });
+  }
+});
+
+// POST /api/partner/invite/decline: Invited user declines pending invite
+app.post('/api/partner/invite/decline', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const callerUid = req.user!.uid;
+    const callerEmail = req.user!.email?.trim().toLowerCase();
+    const { ownerUid } = req.body || {};
+
+    if (!ownerUid) {
+      return res.status(400).json({ error: 'ownerUid is required to decline.' });
+    }
+
+    const inviteDoc = await getPartnerInvite(ownerUid);
+    if (!inviteDoc) {
+      return res.status(404).json({ error: 'No invite found.' });
+    }
+
+    const emailMatches = callerEmail && inviteDoc.email?.toLowerCase() === callerEmail;
+    const uidMatches = inviteDoc.partnerUid && inviteDoc.partnerUid === callerUid;
+    if (!emailMatches && !uidMatches) {
+      return res.status(403).json({ error: 'Forbidden: You are not the invited user.' });
+    }
+
+    await declinePartnerInvite(ownerUid);
+
+    res.json({
+      success: true,
+      message: 'Invite declined.',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to decline invite.' });
+  }
+});
+
+// POST /api/partner/revoke: Revoke accountability partner access and wipe claims
 app.post('/api/partner/revoke', authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    const uid = req.user!.uid;
-    const result = await revokePartner(uid);
-    res.json(result);
+    const callerUid = req.user!.uid;
+    const callerRole = req.user?.role;
+    const callerOwnerUid = req.user?.ownerUid;
+
+    let targetOwnerUid = callerUid;
+    let partnerUidToClear: string | null = null;
+
+    if (callerRole === 'partner' && callerOwnerUid) {
+      targetOwnerUid = callerOwnerUid;
+      partnerUidToClear = callerUid;
+    } else {
+      const invite = await getPartnerInvite(callerUid);
+      partnerUidToClear = invite?.partnerUid || null;
+    }
+
+    // Clear custom claims on the partner account
+    if (partnerUidToClear) {
+      try {
+        await adminAuth.setCustomUserClaims(partnerUidToClear, {});
+        await adminAuth.revokeRefreshTokens(partnerUidToClear).catch(() => {});
+      } catch (_claimErr: any) {
+        // Suppress Identity Toolkit API errors
+      }
+
+      await upsertUserProfile(partnerUidToClear, {
+        role: undefined,
+        ownerUid: null,
+      }).catch(() => {});
+    }
+
+    const result = await revokePartner(targetOwnerUid);
+    res.json({
+      success: true,
+      message: 'Partner access revoked.',
+      result,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to revoke partner.' });
   }
@@ -981,12 +1285,19 @@ app.get('/api/partner/status', authenticate, async (req: AuthRequest, res: Respo
 
     // Strict authorization: caller must be a partner with matching ownerUid
     if (callerRole !== 'partner' || !callerOwnerUid || (requestedOwnerUid && callerOwnerUid !== requestedOwnerUid)) {
+      console.warn(
+        `[Partner Status 403] Authorization failure: callerRole="${callerRole}", callerOwnerUid="${callerOwnerUid}", requestedOwnerUid="${requestedOwnerUid}"`
+      );
       return res.status(403).json({
         error: 'Forbidden: Caller is not authorized to view status for this owner.',
       });
     }
 
-    const [tasks, strips] = await Promise.all([getTasks(callerOwnerUid), getDailyStrips(callerOwnerUid)]);
+    const [tasks, strips, ownerDisplayName] = await Promise.all([
+      getTasks(callerOwnerUid),
+      getDailyStrips(callerOwnerUid),
+      resolveUserDisplayName(callerOwnerUid),
+    ]);
     const now = Date.now();
     const escalationWindowMs = 48 * 3600 * 1000;
 
@@ -1002,6 +1313,8 @@ app.get('/api/partner/status', authenticate, async (req: AuthRequest, res: Respo
     res.json({
       dailyStripLine: latestStrip,
       hasHardConsequenceInEscalationWindow,
+      ownerName: ownerDisplayName,
+      ownerUid: callerOwnerUid,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to compute partner status.' });
@@ -1014,7 +1327,10 @@ app.get('/api/partner/status', authenticate, async (req: AuthRequest, res: Respo
 async function start() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

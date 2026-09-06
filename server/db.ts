@@ -12,6 +12,7 @@ import type {
   TaskEntry,
   DailyStrip,
   PartnerInvite,
+  PartnerInviteStatus,
   AnchorTimes,
   UserProfile,
   JournalEntry,
@@ -113,12 +114,19 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
 
 export async function upsertUserProfile(
   uid: string,
-  params: { email?: string | null; displayName?: string | null; anchorTimes?: AnchorTimes; notificationToken?: string; timezone?: string }
+  params: {
+    email?: string | null;
+    displayName?: string | null;
+    anchorTimes?: AnchorTimes;
+    notificationToken?: string;
+    timezone?: string;
+    role?: 'owner' | 'partner';
+    ownerUid?: string | null;
+  }
 ): Promise<UserProfile> {
-  const nowIso = new Date().toISOString();
   const existing = (await getUserProfile(uid)) || {
     uid,
-    email: params.email || null,
+    email: params.email ? params.email.trim().toLowerCase() : null,
     displayName: params.displayName || null,
     photoURL: null,
     anchorTimes: { beforeWork: '08:30', afterWork: '17:30', beforeSleep: '23:00' },
@@ -127,11 +135,13 @@ export async function upsertUserProfile(
 
   const updated: UserProfile = {
     ...existing,
-    email: params.email !== undefined ? params.email : existing.email,
+    email: params.email !== undefined ? (params.email ? params.email.trim().toLowerCase() : null) : existing.email,
     displayName: params.displayName !== undefined ? params.displayName : existing.displayName,
     anchorTimes: params.anchorTimes ? { ...existing.anchorTimes, ...params.anchorTimes } : existing.anchorTimes,
     notificationToken: params.notificationToken !== undefined ? params.notificationToken : existing.notificationToken,
     timezone: params.timezone !== undefined ? params.timezone : (existing.timezone || 'UTC'),
+    role: params.role !== undefined ? params.role : existing.role,
+    ownerUid: params.ownerUid !== undefined ? params.ownerUid : existing.ownerUid,
   };
 
   try {
@@ -144,6 +154,131 @@ export async function upsertUserProfile(
   store.users[uid] = updated;
   saveLocalStore(store);
   return updated;
+}
+
+/**
+ * Robust User Lookup by Email:
+ * 1. Checks Firestore users collection first (fast, native, works without Identity Toolkit API)
+ * 2. Checks local/sandbox memory store
+ * 3. Falls back to adminAuth.getUserByEmail with silent error suppression for Identity Toolkit API errors
+ */
+export async function findUserByEmail(
+  email: string
+): Promise<{ uid: string; email: string; displayName?: string; customClaims?: any } | null> {
+  const normalized = (email || '').trim().toLowerCase();
+  if (!normalized) return null;
+
+  // 1. Query Firestore users collection by email
+  try {
+    const snap = await adminDb
+      .collection('users')
+      .where('email', '==', normalized)
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      const doc = snap.docs[0];
+      const data = doc.data() as UserProfile;
+      return {
+        uid: doc.id,
+        email: data.email || normalized,
+        displayName: data.displayName || undefined,
+        customClaims: {
+          role: data.role,
+          ownerUid: data.ownerUid,
+        },
+      };
+    }
+
+    // Try case-sensitive query if stored with original casing
+    if (normalized !== email.trim()) {
+      const snapOriginal = await adminDb
+        .collection('users')
+        .where('email', '==', email.trim())
+        .limit(1)
+        .get();
+      if (!snapOriginal.empty) {
+        const doc = snapOriginal.docs[0];
+        const data = doc.data() as UserProfile;
+        return {
+          uid: doc.id,
+          email: data.email || normalized,
+          displayName: data.displayName || undefined,
+          customClaims: {
+            role: data.role,
+            ownerUid: data.ownerUid,
+          },
+        };
+      }
+    }
+  } catch (_err) {
+    // Continue to fallback
+  }
+
+  // 2. Query in-memory / local fallback store
+  const store = loadLocalStore();
+  for (const [uid, user] of Object.entries(store.users || {})) {
+    if (user?.email && user.email.toLowerCase() === normalized) {
+      return {
+        uid,
+        email: user.email,
+        displayName: user.displayName || undefined,
+        customClaims: {
+          role: user.role,
+          ownerUid: user.ownerUid,
+        },
+      };
+    }
+  }
+
+  // 3. Fallback to Firebase Admin Auth if available, suppressing Identity Toolkit errors cleanly
+  try {
+    const userRecord = await adminAuth.getUserByEmail(normalized);
+    if (userRecord) {
+      return {
+        uid: userRecord.uid,
+        email: userRecord.email || normalized,
+        displayName: userRecord.displayName || undefined,
+        customClaims: userRecord.customClaims || {},
+      };
+    }
+  } catch (_err) {
+    // Identity Toolkit API not enabled or user not found - cleanly caught
+  }
+
+  return null;
+}
+
+/**
+ * Check if a caller has an active partner relationship
+ */
+export async function getActivePartnerRelationship(
+  partnerUid: string
+): Promise<{ ownerUid: string; ownerName?: string } | null> {
+  try {
+    const snap = await adminDb
+      .collectionGroup('partnerInvite')
+      .where('partnerUid', '==', partnerUid)
+      .where('status', '==', 'active')
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      const data = snap.docs[0].data() as PartnerInvite;
+      const ownerUid = (data as any).ownerUid || snap.docs[0].ref.parent?.parent?.id;
+      if (ownerUid) {
+        return { ownerUid, ownerName: data.ownerName };
+      }
+    }
+  } catch (_err) {
+    // fallback
+  }
+
+  const store = loadLocalStore();
+  for (const [ownerUid, inv] of Object.entries(store.invites || {})) {
+    if (inv && inv.status === 'active' && inv.partnerUid === partnerUid) {
+      return { ownerUid, ownerName: inv.ownerName };
+    }
+  }
+  return null;
 }
 
 /**
@@ -651,12 +786,19 @@ export async function getPartnerInvite(uid: string): Promise<PartnerInvite | nul
   return store.invites[uid] || null;
 }
 
-export async function createPartnerInvite(uid: string, email: string): Promise<PartnerInvite> {
+export async function savePartnerInvite(
+  uid: string,
+  inviteData: Partial<PartnerInvite> & { email: string; status: PartnerInviteStatus }
+): Promise<PartnerInvite> {
+  const existing = await getPartnerInvite(uid);
   const invite: PartnerInvite = {
-    email: email.trim().toLowerCase(),
-    status: 'pending',
-    partnerUid: null,
-    createdAt: new Date().toISOString(),
+    ...(existing || {}),
+    ...inviteData,
+    email: inviteData.email.trim().toLowerCase(),
+    status: inviteData.status,
+    partnerUid: inviteData.partnerUid !== undefined ? inviteData.partnerUid : (existing?.partnerUid || null),
+    createdAt: existing?.createdAt || inviteData.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
 
   try {
@@ -665,15 +807,244 @@ export async function createPartnerInvite(uid: string, email: string): Promise<P
       .doc(uid)
       .collection('partnerInvite')
       .doc('current')
-      .set(sanitizePayload(invite));
+      .set(sanitizePayload(invite), { merge: true });
   } catch (err: any) {
-    console.warn('[DB] Fallback createPartnerInvite:', err.message);
+    console.warn('[DB] Fallback savePartnerInvite:', err.message);
   }
 
   const store = loadLocalStore();
   store.invites[uid] = invite;
   saveLocalStore(store);
   return invite;
+}
+
+export async function resolveUserDisplayName(uid: string): Promise<string> {
+  try {
+    const userRecord = await adminAuth.getUser(uid);
+    if (userRecord?.displayName && userRecord.displayName.trim().length > 0) {
+      return userRecord.displayName.trim();
+    }
+    if (userRecord?.email) {
+      return userRecord.email.split('@')[0];
+    }
+  } catch (err: any) {
+    // ignore
+  }
+
+  try {
+    const profile = await getUserProfile(uid);
+    if (profile?.displayName && profile.displayName.trim().length > 0) {
+      return profile.displayName.trim();
+    }
+    if (profile?.email) {
+      return profile.email.split('@')[0];
+    }
+  } catch (err: any) {
+    // ignore
+  }
+
+  return 'Your focus partner';
+}
+
+export async function createPartnerInvite(
+  uid: string,
+  email: string,
+  ownerName?: string,
+  ownerEmail?: string
+): Promise<PartnerInvite> {
+  const resolvedName = ownerName || (await resolveUserDisplayName(uid));
+  return savePartnerInvite(uid, {
+    email: email.trim().toLowerCase(),
+    status: 'pending',
+    partnerUid: null,
+    ownerUid: uid,
+    ownerName: resolvedName,
+    ownerEmail: ownerEmail || '',
+  });
+}
+
+export async function approvePartnerInvite(
+  ownerUid: string,
+  targetEmail: string,
+  partnerUid: string,
+  ownerName?: string,
+  ownerEmail?: string
+): Promise<PartnerInvite> {
+  const existing = await getPartnerInvite(ownerUid);
+  const resolvedName =
+    ownerName && ownerName !== ownerUid && ownerName !== 'Your buddy'
+      ? ownerName
+      : existing?.ownerName && existing.ownerName !== ownerUid && existing.ownerName !== 'Your buddy'
+      ? existing.ownerName
+      : await resolveUserDisplayName(ownerUid);
+
+  const invite: PartnerInvite = {
+    ...(existing || {}),
+    email: targetEmail.trim().toLowerCase(),
+    status: 'pending',
+    partnerUid,
+    ownerUid,
+    ownerName: resolvedName,
+    ownerEmail: ownerEmail || existing?.ownerEmail || '',
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    approvedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    await adminDb
+      .collection('users')
+      .doc(ownerUid)
+      .collection('partnerInvite')
+      .doc('current')
+      .set(sanitizePayload(invite), { merge: true });
+  } catch (err: any) {
+    console.warn('[DB] Fallback approvePartnerInvite:', err.message);
+  }
+
+  const store = loadLocalStore();
+  store.invites[ownerUid] = invite;
+  saveLocalStore(store);
+  return invite;
+}
+
+export async function acceptPartnerInvite(ownerUid: string, partnerUid: string): Promise<PartnerInvite> {
+  const existing = await getPartnerInvite(ownerUid);
+  const updated: PartnerInvite = {
+    ...(existing || { email: '', createdAt: new Date().toISOString() }),
+    status: 'active',
+    partnerUid,
+    ownerUid,
+    acceptedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    await adminDb
+      .collection('users')
+      .doc(ownerUid)
+      .collection('partnerInvite')
+      .doc('current')
+      .set(sanitizePayload(updated), { merge: true });
+  } catch (err: any) {
+    console.warn('[DB] Fallback acceptPartnerInvite:', err.message);
+  }
+
+  const store = loadLocalStore();
+  store.invites[ownerUid] = updated;
+  saveLocalStore(store);
+  return updated;
+}
+
+export async function declinePartnerInvite(ownerUid: string): Promise<void> {
+  const updateData = {
+    status: 'revoked' as PartnerInviteStatus,
+    partnerUid: null,
+    declinedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    await adminDb
+      .collection('users')
+      .doc(ownerUid)
+      .collection('partnerInvite')
+      .doc('current')
+      .set(updateData, { merge: true });
+  } catch (err: any) {
+    console.warn('[DB] Fallback declinePartnerInvite:', err.message);
+  }
+
+  const store = loadLocalStore();
+  if (store.invites[ownerUid]) {
+    store.invites[ownerUid].status = 'revoked';
+    store.invites[ownerUid].partnerUid = null;
+    saveLocalStore(store);
+  }
+}
+
+export async function getIncomingInviteForUser(
+  userEmail?: string | null,
+  userUid?: string | null
+): Promise<(PartnerInvite & { ownerUid: string; ownerName?: string; ownerEmail?: string }) | null> {
+  const email = (userEmail || '').trim().toLowerCase();
+
+  try {
+    if (email) {
+      const snap = await adminDb
+        .collectionGroup('partnerInvite')
+        .where('email', '==', email)
+        .get();
+
+      for (const doc of snap.docs) {
+        const data = doc.data() as PartnerInvite;
+        if (data.status === 'pending') {
+          const ownerUid = (data as any).ownerUid || doc.ref.parent?.parent?.id;
+          if (ownerUid) {
+            let ownerName = data.ownerName;
+            if (!ownerName || ownerName === ownerUid || ownerName === 'Your buddy') {
+              ownerName = await resolveUserDisplayName(ownerUid);
+            }
+            return {
+              ...data,
+              ownerUid,
+              ownerName: ownerName || 'Your focus partner',
+              ownerEmail: data.ownerEmail || '',
+            };
+          }
+        }
+      }
+    }
+
+    if (userUid) {
+      const snap = await adminDb
+        .collectionGroup('partnerInvite')
+        .where('partnerUid', '==', userUid)
+        .get();
+
+      for (const doc of snap.docs) {
+        const data = doc.data() as PartnerInvite;
+        if (data.status === 'pending') {
+          const ownerUid = (data as any).ownerUid || doc.ref.parent?.parent?.id;
+          if (ownerUid) {
+            let ownerName = data.ownerName;
+            if (!ownerName || ownerName === ownerUid || ownerName === 'Your buddy') {
+              ownerName = await resolveUserDisplayName(ownerUid);
+            }
+            return {
+              ...data,
+              ownerUid,
+              ownerName: ownerName || 'Your focus partner',
+              ownerEmail: data.ownerEmail || '',
+            };
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[DB] Fallback getIncomingInviteForUser:', err.message);
+  }
+
+  // Fallback local memory store
+  const store = loadLocalStore();
+  for (const [ownerUid, inv] of Object.entries(store.invites || {})) {
+    if (inv && inv.status === 'pending') {
+      const emailMatches = email && inv.email && inv.email.toLowerCase() === email;
+      const uidMatches = userUid && inv.partnerUid === userUid;
+      if (emailMatches || uidMatches) {
+        let ownerName = inv.ownerName;
+        if (!ownerName || ownerName === ownerUid || ownerName === 'Your buddy') {
+          const ownerProfile = store.users[ownerUid];
+          ownerName =
+            ownerProfile?.displayName ||
+            (ownerProfile?.email ? ownerProfile.email.split('@')[0] : 'Your focus partner');
+        }
+        return { ...inv, ownerUid, ownerName: ownerName || 'Your focus partner' };
+      }
+    }
+  }
+
+  return null;
 }
 
 export async function revokePartner(uid: string): Promise<{ success: boolean }> {

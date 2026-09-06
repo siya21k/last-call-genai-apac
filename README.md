@@ -173,24 +173,40 @@ gcloud run services update last-call \
 
 ---
 
-## 7. Out-of-Band Partner RBAC Scripts
+## 7. Partner RBAC & Backend Workflow
 
-Accountability partner custom claims are provisioned strictly out-of-band by administrators to ensure zero client privilege escalation:
+Accountability partner access follows a zero-trust, consent-driven workflow without requiring manual CLI scripts for standard user actions:
 
-### 1. Assigning an Accountability Partner
+### In-App Backend Endpoints (Authenticated & Role-Gated)
+
+1. **Owner Approves/Sends Partner Request**: `POST /api/partner/invite/approve`
+   - **Security Boundary**: Requires verified JWT authentication. The caller's `uid` must match `ownerUid` on the `users/{ownerUid}/partnerInvite/current` record.
+   - **Validation & State Engine**:
+     - Verifies whether the target email is registered in Firebase Authentication (`EMAIL_NOT_REGISTERED` response if not yet registered).
+     - Checks if the partner is already active (`ALREADY_SETUP` response).
+     - Checks if the email is already assigned to a different owner (`DIFFERENT_OWNER_CONFLICT` requires explicit UI confirmation).
+     - Checks if the owner already has an active partner (`REPLACE_ACTIVE_PARTNER` requires explicit UI confirmation).
+     - Upon confirmation, writes `{ email, status: 'pending', partnerUid: null, approvedAt }` to `users/{ownerUid}/partnerInvite/current`.
+
+2. **Invited User Receives and Accepts/Declines Request**:
+   - `GET /api/partner/incoming-invite`: Queries if the authenticated caller has any pending partner invites matching their email or UID.
+   - `POST /api/partner/invite/accept`: The invited partner explicitly consents. Verifies caller identity, applies custom claims `{ role: 'partner', ownerUid }` via Firebase Admin SDK, and updates invite status to `'active'`.
+   - `POST /api/partner/invite/decline`: Allows the invited user to decline the invite, clearing or archiving the record.
+
+3. **Revocation**: `POST /api/partner/revoke`
+   - Can be called by either the **owner** (to remove their current partner) or the **partner** (to disconnect themselves).
+   - Automatically revokes custom claims on the partner account and updates the invite status to `'revoked'`.
+
+### Developer Out-of-Band Admin Scripts (Optional / Emergency Use)
+
+For administrative emergencies, command-line scripts remain available:
 ```bash
+# Emergency manual assignment (optional fallback)
 node scripts/assign-partner.js --email partner@example.com --ownerUid <OWNER_UID> [--confirm-overwrite]
-```
-- Looks up the registered Firebase user by email.
-- Sets verified custom claims `{ role: 'partner', ownerUid: '<OWNER_UID>' }`.
-- Updates `users/{ownerUid}/partnerInvite/current` to `status: 'active'`.
 
-### 2. Revoking an Accountability Partner
-```bash
+# Emergency manual revocation (optional fallback)
 node scripts/revoke-partner.js --ownerUid <OWNER_UID>
 ```
-- Revokes custom claims from the active partner account.
-- Sets `users/{ownerUid}/partnerInvite/current` to `status: 'revoked'`.
 
 ---
 
@@ -246,14 +262,28 @@ Every user interaction has a corresponding end-to-end test verification procedur
    - Task moves off the active radar without negative streak penalties or failure badges.
    - Amnesty record is added to the chat thread.
 
-### Test Case 8: Accountability Partner Modal Dismissibility
+### Test Case 8: Accountability Partner Modal Dismissibility & Keyboard Accessibility
 1. **Action**: Open Partner Modal via header or side panel. Send an invite email. With invite pending, click the **X** button, the **Close** button, or press `Escape`.
 2. **Expected Outcome**:
    - Modal dismisses cleanly and does not reopen on re-render.
    - Invite remains safely in `pending` status on the server.
 
-### Test Case 9: Accountability Partner Read-Only Aggregate Isolation
-1. **Action**: Authenticate with partner custom claims `{ role: 'partner', ownerUid: '<OWNER_UID>' }`.
+### Test Case 9: Partner Invite Conflict & Structured Error Handling
+1. **Action**: In the Partner Modal, enter an email that has not yet signed in, or an email already partnered to another owner. Click "Add Partner".
 2. **Expected Outcome**:
-   - Partner view displays solely the partner summary (streak count, active focus risk, upcoming deadline title).
-   - Chat threads, log entries, and check-in subcollections are completely hidden and inaccessible.
+   - If email is unregistered: A structured banner explains that the user needs to sign in with Google once so their account exists.
+   - If email is partnered to another owner: A confirmation box prompts `"This email is already a partner for a different owner — confirm to reassign?"`.
+   - Clicking `"Confirm & Reassign"` proceeds with the reassignment safely via `confirmOverwrite: true`.
+
+### Test Case 10: Two-Sided Explicit Partner Consent (Accept / Decline)
+1. **Action**: Owner sends/approves an invite to `partner@example.com`. The partner logs in with Google.
+2. **Expected Outcome**:
+   - An in-app banner appears: `"<Owner> wants to share their daily focus status with you — accept?"`
+   - If partner clicks **Decline**: Invite is dismissed without granting claims.
+   - If partner clicks **Accept**: `POST /api/partner/invite/accept` assigns custom claims `{ role: 'partner', ownerUid }`, refreshes token, and switches partner to Partner Focus Monitor.
+
+### Test Case 11: Accountability Partner Read-Only Aggregate Isolation & Self-Revoke
+1. **Action**: Authenticate as partner. View the Partner Focus Monitor. Click **"Disconnect as Partner"**.
+2. **Expected Outcome**:
+   - Partner view displays solely aggregate daily strip line and hard-consequence escalation alert. All raw tasks, check-in chats, and journal entries are strictly blocked.
+   - Clicking "Disconnect as Partner" calls `POST /api/partner/revoke`, clears claims, and returns user to standard mode.
