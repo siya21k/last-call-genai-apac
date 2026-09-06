@@ -1,10 +1,136 @@
 {
-  "users": {},
-  "tasks": {},
+  "users": {
+    "TpBIImBA0KXeaqddzkPREVWAfag2": {
+      "uid": "TpBIImBA0KXeaqddzkPREVWAfag2",
+      "email": null,
+      "displayName": null,
+      "photoURL": null,
+      "anchorTimes": {
+        "beforeWork": "08:30",
+        "afterWork": "17:30",
+        "beforeSleep": "23:00"
+      },
+      "timezone": "Asia/Calcutta"
+    }
+  },
+  "tasks": {
+    "TpBIImBA0KXeaqddzkPREVWAfag2_task_1788701033280_y5fgj": {
+      "id": "task_1788701033280_y5fgj",
+      "name": "Publish article",
+      "dueAt": "2026-09-07T16:30:00.000Z",
+      "anchorPhrase": "none",
+      "status": "pending",
+      "consequenceType": "unspecified",
+      "patternNote": "",
+      "lastGuaranteedNudgeAt": null,
+      "lastEscalationNudgeAt": null,
+      "createdAt": "2026-09-06T13:23:53.280Z"
+    }
+  },
   "taskEntries": {},
-  "threadMessages": {},
-  "logEntries": {},
-  "dailyStrip": {},
+  "threadMessages": {
+    "TpBIImBA0KXeaqddzkPREVWAfag2": [
+      {
+        "id": "msg_1788700954363_8n1fc",
+        "role": "system",
+        "text": "Last Call online. Type a task to drop on the board, a check-in on an open item, or a log of what you just finished.",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T13:22:34.363Z"
+      },
+      {
+        "id": "msg_1788700965407_pejs3",
+        "role": "user",
+        "text": "Just finished calling the vet",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T13:22:45.407Z"
+      },
+      {
+        "id": "msg_1788700974712_lk5on",
+        "role": "system",
+        "text": "Logged: \"Just finished calling the vet\". (No matching open task on the board).",
+        "relatedTaskId": null,
+        "relatedLogEntryId": "log_1788700974579_po45c",
+        "messageType": "normal",
+        "createdAt": "2026-09-06T13:22:54.712Z"
+      },
+      {
+        "id": "msg_1788701029533_xyr7r",
+        "role": "user",
+        "text": "Publish article before 10PM tomorrow",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T13:23:49.533Z"
+      },
+      {
+        "id": "msg_1788701033387_2ed87",
+        "role": "system",
+        "text": "Set task 'Publish article' due tomorrow at 10:00 PM.",
+        "relatedTaskId": "task_1788701033280_y5fgj",
+        "relatedLogEntryId": null,
+        "messageType": "task-created",
+        "createdAt": "2026-09-06T13:23:53.387Z"
+      },
+      {
+        "id": "msg_1788701060240_fr7w6",
+        "role": "user",
+        "text": "I completed learning 3 lessons today!",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T13:24:20.240Z"
+      },
+      {
+        "id": "msg_1788701064801_iep6w",
+        "role": "system",
+        "text": "Logged: \"I completed learning 3 lessons today!\". (No matching open task on the board).",
+        "relatedTaskId": null,
+        "relatedLogEntryId": "log_1788701064768_2xeya",
+        "messageType": "normal",
+        "createdAt": "2026-09-06T13:24:24.801Z"
+      }
+    ]
+  },
+  "logEntries": {
+    "TpBIImBA0KXeaqddzkPREVWAfag2": [
+      {
+        "id": "log_1788700974579_po45c",
+        "text": "Just finished calling the vet",
+        "matchedTaskId": null,
+        "createdAt": "2026-09-06T13:22:54.579Z"
+      },
+      {
+        "id": "log_1788701064768_2xeya",
+        "text": "I completed learning 3 lessons today!",
+        "matchedTaskId": null,
+        "createdAt": "2026-09-06T13:24:24.768Z"
+      }
+    ]
+  },
+  "dailyStrip": {
+    "TpBIImBA0KXeaqddzkPREVWAfag2": {
+      "2026-09-06": {
+        "line": "Mood",
+        "mood": "⚡"
+      }
+    }
+  },
   "invites": {},
-  "journalEntries": {}
+  "journalEntries": {
+    "TpBIImBA0KXeaqddzkPREVWAfag2": [
+      {
+        "id": "jnl_1788701083015_ifwqv",
+        "text": "Had a productive weekend! Completed syllabus for the upcoming midterms",
+        "title": null,
+        "link": null,
+        "tags": [],
+        "createdAt": "2026-09-06T13:24:43.015Z"
+      }
+    ]
+  },
+  "presence": {}
 }

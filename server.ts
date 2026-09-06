@@ -82,7 +82,8 @@ async function authenticate(req: AuthRequest, res: Response, next: NextFunction)
     try {
       const parts = token.split('.');
       if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'));
         if (payload.user_id || payload.sub) {
           req.user = {
             uid: payload.user_id || payload.sub,
@@ -949,8 +950,12 @@ app.get('/api/partner/invite', authenticate, async (req: AuthRequest, res: Respo
 app.post('/api/partner/invite', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user!.uid;
-    const { email } = req.body || {};
-    const invite = await createPartnerInvite(uid, email);
+    const { email, partnerEmail } = req.body || {};
+    const targetEmail = (email || partnerEmail || '').toString().trim();
+    if (!targetEmail) {
+      return res.status(400).json({ error: 'Valid partner email address is required.' });
+    }
+    const invite = await createPartnerInvite(uid, targetEmail);
     res.status(201).json({ invite });
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Failed to create partner invite.' });

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Shield, Copy, Check, Eye } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Shield, Copy, Check, Eye, RefreshCw } from 'lucide-react';
 import type { PartnerInvite } from '../types';
+import { getFreshToken } from '../lib/firebase';
 
 interface PartnerModalProps {
   ownerUid: string;
@@ -15,29 +16,74 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
   const [emailInput, setEmailInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const fetchInvite = async () => {
+  const getActiveToken = useCallback(async (): Promise<string> => {
+    try {
+      const fresh = await getFreshToken();
+      if (fresh) return fresh;
+    } catch (_) {}
+    return token;
+  }, [token]);
+
+  const fetchInvite = useCallback(async (isRetry = false) => {
     try {
       setLoading(true);
-      const res = await fetch('/api/partner/invite', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      setErrorMsg(null);
+      const activeToken = await getActiveToken();
+
+      let res: Response | null = null;
+      let lastErr: any = null;
+
+      // Auto-retry once on transient connection hiccups (e.g., container cold-start or reboot)
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          res = await fetch('/api/partner/invite', {
+            headers: { Authorization: `Bearer ${activeToken}` },
+          });
+          break;
+        } catch (netErr: any) {
+          lastErr = netErr;
+          if (attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 800));
+          }
+        }
+      }
+
+      if (!res) {
+        throw lastErr || new Error('Connection refused');
+      }
+
       if (res.ok) {
         const data = await res.json();
         setInvite(data.invite || null);
+        setErrorMsg(null);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setErrorMsg(errData.error || 'Failed to load partner invite.');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error loading partner invite:', e);
+      const isNetError =
+        e?.message === 'Failed to fetch' ||
+        e?.message?.includes('Network') ||
+        e?.message?.includes('network') ||
+        e?.message?.includes('Connection');
+      setErrorMsg(
+        isNetError
+          ? 'Unable to connect to partner service. Click Retry to reconnect.'
+          : e.message || 'Error loading partner invite.'
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }, [getActiveToken]);
 
   useEffect(() => {
     if (isOpen) {
       fetchInvite();
     }
-  }, [ownerUid, token, isOpen]);
+  }, [ownerUid, isOpen, fetchInvite]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -56,21 +102,31 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
 
     try {
       setSaving(true);
+      setErrorMsg(null);
+      const activeToken = await getActiveToken();
       const res = await fetch('/api/partner/invite', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${activeToken}`,
         },
-        body: JSON.stringify({ partnerEmail: emailInput.trim() }),
+        body: JSON.stringify({
+          email: emailInput.trim(),
+          partnerEmail: emailInput.trim(),
+        }),
       });
 
       if (res.ok) {
         await fetchInvite();
         setEmailInput('');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setErrorMsg(errData.error || 'Failed to send partner invite.');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error saving partner invite:', e);
+      const isNetError = e?.message === 'Failed to fetch' || e?.message?.includes('Network');
+      setErrorMsg(isNetError ? 'Network error sending invite. Please check your connection and retry.' : (e.message || 'Error saving partner invite.'));
     } finally {
       setSaving(false);
     }
@@ -81,19 +137,25 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
 
     try {
       setSaving(true);
+      setErrorMsg(null);
+      const activeToken = await getActiveToken();
       const res = await fetch('/api/partner/revoke', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${activeToken}`,
         },
       });
 
       if (res.ok) {
         await fetchInvite();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setErrorMsg(errData.error || 'Failed to revoke partner.');
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error('Error revoking partner:', e);
+      setErrorMsg(e.message || 'Error revoking partner.');
     } finally {
       setSaving(false);
     }
@@ -155,6 +217,21 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
               Your partner can <strong>ONLY</strong> view the aggregate daily strip summary and whether a hard-consequence task is approaching. They have zero access to your check-in chats, avoidance reasons, or personal journal notes.
             </p>
           </div>
+
+          {errorMsg && (
+            <div className="retro-sunken p-2.5 bg-[#ffe8e5] text-rose-950 text-xs font-bold border-2 border-rose-400 rounded-xl flex items-center justify-between gap-2">
+              <span className="flex-1 leading-snug">{errorMsg}</span>
+              <button
+                type="button"
+                onClick={() => fetchInvite(true)}
+                disabled={loading}
+                className="retro-btn text-[11px] px-2.5 py-1 bg-white font-extrabold flex items-center gap-1 shrink-0"
+              >
+                <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+                <span>Retry</span>
+              </button>
+            </div>
+          )}
 
           {loading ? (
             <div className="retro-sunken py-6 text-center text-xs text-stone-500 font-mono">
@@ -257,11 +334,19 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
                   Cancel
                 </button>
                 <button
+                  id="send-partner-invite-btn"
                   type="submit"
                   disabled={!emailInput.trim() || saving}
-                  className="retro-btn-primary px-4 py-1 text-xs font-bold disabled:opacity-50"
+                  className="retro-btn-primary px-4 py-1 text-xs font-bold disabled:opacity-50 flex items-center gap-1.5"
                 >
-                  {saving ? 'Saving...' : 'Send Invite'}
+                  {saving ? (
+                    <>
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Sending...</span>
+                    </>
+                  ) : (
+                    <span>Send Invite</span>
+                  )}
                 </button>
               </div>
             </form>

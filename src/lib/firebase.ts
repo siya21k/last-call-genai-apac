@@ -1,5 +1,13 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, type User } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged,
+  onIdTokenChanged,
+  type User,
+} from 'firebase/auth';
 import { getFirestore, doc, getDoc, getDocFromServer, onSnapshot } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -22,6 +30,15 @@ export async function logout(): Promise<void> {
   await signOut(auth);
 }
 
+export async function getFreshToken(): Promise<string | null> {
+  if (!auth.currentUser) return null;
+  try {
+    return await auth.currentUser.getIdToken();
+  } catch {
+    return null;
+  }
+}
+
 // Test connectivity on initial load as recommended by Firebase skill
 export async function testConnection(): Promise<void> {
   try {
@@ -35,5 +52,5 @@ export async function testConnection(): Promise<void> {
   }
 }
 
-export { onAuthStateChanged, doc, getDoc, onSnapshot };
+export { onAuthStateChanged, onIdTokenChanged, doc, getDoc, onSnapshot };
 export type { User };

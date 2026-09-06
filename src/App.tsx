@@ -6,7 +6,17 @@ import { SettingsModal } from './components/SettingsModal';
 import { PartnerModal } from './components/PartnerModal';
 import { DailyStripHeader } from './components/DailyStripHeader';
 import { MascotFlower, DecorativeSparkle } from './components/Mascot';
-import { auth, loginWithGoogle, logout, onAuthStateChanged, testConnection, onSnapshot, doc, db } from './lib/firebase';
+import {
+  auth,
+  loginWithGoogle,
+  logout,
+  onAuthStateChanged,
+  onIdTokenChanged,
+  testConnection,
+  onSnapshot,
+  doc,
+  db,
+} from './lib/firebase';
 import type {
   Task,
   ThreadMessage,
@@ -86,7 +96,19 @@ export function App() {
       setAuthLoading(false);
     });
 
-    return () => unsubscribe();
+    const unsubIdToken = onIdTokenChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const fresh = await firebaseUser.getIdToken();
+          setToken(fresh);
+        } catch (_) {}
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      unsubIdToken();
+    };
   }, []);
 
   // Fetch thread and task list
