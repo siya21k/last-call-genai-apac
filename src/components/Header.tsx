@@ -1,10 +1,9 @@
 import React from 'react';
-import { Clock, Shield, UserCheck, LogOut, LogIn, User, Sparkles } from 'lucide-react';
-import type { UserProfile, UserStatus } from '../types';
+import { Clock, Shield, UserCheck, LogOut, LogIn, User } from 'lucide-react';
+import type { UserProfile } from '../types';
 
 interface HeaderProps {
   user: UserProfile | null;
-  status: UserStatus | null;
   onLogin: () => void;
   onLogout: () => void;
   onOpenPartnerModal: () => void;
@@ -13,7 +12,6 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({
   user,
-  status,
   onLogin,
   onLogout,
   onOpenPartnerModal,

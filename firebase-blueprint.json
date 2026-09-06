@@ -2,63 +2,88 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "User profile document storing basic identity information.",
+      "description": "User profile document storing basic identity information, notification token, and optional anchor times.",
       "type": "object",
       "properties": {
         "displayName": { "type": "string" },
         "email": { "type": "string", "format": "email" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "notificationToken": { "type": "string" },
+        "anchorTimes": {
+          "type": "object",
+          "properties": {
+            "beforeWork": { "type": "string" },
+            "afterWork": { "type": "string" },
+            "beforeSleep": { "type": "string" }
+          }
+        }
       },
       "required": ["email", "createdAt"]
     },
-    "Deadline": {
-      "title": "Deadline",
-      "description": "ADHD focus task deadline tracked for initiation and completion.",
+    "Task": {
+      "title": "Task",
+      "description": "Task created by extraction or manual input with inferred consequence type and reminder tracking timestamps.",
       "type": "object",
       "properties": {
         "name": { "type": "string" },
         "dueAt": { "type": "string", "format": "date-time" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "status": { "type": "string", "enum": ["pending", "met", "missed"] },
-        "latestRiskLevel": { "type": "string", "enum": ["low", "medium", "critical", "none"] }
+        "anchorPhrase": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "met", "missed", "released"] },
+        "consequenceType": { "type": "string", "enum": ["hard", "soft", "unspecified"] },
+        "patternNote": { "type": "string" },
+        "lastGuaranteedNudgeAt": { "type": "string", "format": "date-time" },
+        "lastEscalationNudgeAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["name", "dueAt", "createdAt", "status"]
+      "required": ["name", "dueAt", "status", "consequenceType", "createdAt"]
     },
-    "CheckInEntry": {
-      "title": "CheckInEntry",
-      "description": "ADHD check-in conversation log with AI and structured output summary.",
+    "TaskEntry": {
+      "title": "TaskEntry",
+      "description": "Subcollection under a task storing a completed check-in's structured extraction and transcript.",
       "type": "object",
       "properties": {
-        "category": { "type": "string" },
-        "riskLevel": { "type": "string", "enum": ["low", "medium", "critical"] },
         "summary": { "type": "string" },
-        "actionItems": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
-        "locationTag": { "type": "string", "enum": ["home", "office", "in bed", "other"] },
+        "nextPhysicalAction": { "type": "string" },
         "conversation": { "type": "array" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "notified": { "type": "boolean" }
+        "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["category", "riskLevel", "summary", "actionItems", "locationTag", "conversation", "createdAt", "notified"]
+      "required": ["summary", "nextPhysicalAction", "conversation", "createdAt"]
     },
-    "Status": {
-      "title": "Status",
-      "description": "Computed aggregate status metrics including streak and risk level for accountability.",
+    "LogEntry": {
+      "title": "LogEntry",
+      "description": "Log entry of completed activities feeding daily strip and fuzzy matching.",
       "type": "object",
       "properties": {
-        "streak": { "type": "number" },
-        "nextDeadlineName": { "type": "string" },
-        "nextDeadlineAt": { "type": "string", "format": "date-time" },
-        "currentRiskLevel": { "type": "string", "enum": ["low", "medium", "critical", "none"] },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "text": { "type": "string" },
+        "matchedTaskId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["streak", "currentRiskLevel", "updatedAt"]
+      "required": ["text", "createdAt"]
+    },
+    "DailyStrip": {
+      "title": "DailyStrip",
+      "description": "Short descriptive one-line summary of activities for a given day.",
+      "type": "object",
+      "properties": {
+        "line": { "type": "string" }
+      },
+      "required": ["line"]
+    },
+    "ThreadMessage": {
+      "title": "ThreadMessage",
+      "description": "Backing message in the instant-messenger chat thread.",
+      "type": "object",
+      "properties": {
+        "role": { "type": "string", "enum": ["user", "system"] },
+        "text": { "type": "string" },
+        "relatedTaskId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["role", "text", "createdAt"]
     },
     "PartnerInvite": {
       "title": "PartnerInvite",
-      "description": "Single-document accountability partner invite record.",
+      "description": "Single pinned document tracking pending or active accountability partner invitation.",
       "type": "object",
       "properties": {
         "email": { "type": "string", "format": "email" },
@@ -72,23 +97,31 @@
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
-      "description": "Root user documents containing public profile details."
+      "description": "Root user documents containing profile, notificationToken, and anchorTimes."
     },
-    "/users/{userId}/deadlines/{deadlineId}": {
-      "schema": "Deadline",
-      "description": "Subcollection of deadlines created and monitored by the user."
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Tasks created via extraction with consequence classification."
     },
-    "/users/{userId}/deadlines/{deadlineId}/entries/{entryId}": {
-      "schema": "CheckInEntry",
-      "description": "Subcollection of multi-turn AI check-ins with structured extraction."
+    "/users/{userId}/tasks/{taskId}/entries/{entryId}": {
+      "schema": "TaskEntry",
+      "description": "Completed check-in structured summaries on a specific task."
     },
-    "/users/{userId}/status/{statusDoc}": {
-      "schema": "Status",
-      "description": "Aggregate summary status document accessible by the owner and accountability partner."
+    "/users/{userId}/logEntries/{logEntryId}": {
+      "schema": "LogEntry",
+      "description": "User log entries describing done activities."
+    },
+    "/users/{userId}/dailyStrip/{dateId}": {
+      "schema": "DailyStrip",
+      "description": "Daily one-line narrative summaries."
+    },
+    "/users/{userId}/threadMessages/{messageId}": {
+      "schema": "ThreadMessage",
+      "description": "Persistent instant-messenger chat thread messages."
     },
     "/users/{userId}/partnerInvite/{inviteDoc}": {
       "schema": "PartnerInvite",
-      "description": "Document tracking pending or active accountability partner invitation."
+      "description": "Single pinned document for accountability partner invite."
     }
   }
 }

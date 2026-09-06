@@ -18,9 +18,10 @@ interface PartnerModalProps {
   ownerUid: string;
   token: string;
   onClose: () => void;
+  isOpen?: boolean;
 }
 
-export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onClose }) => {
+export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onClose, isOpen = true }) => {
   const [invite, setInvite] = useState<PartnerInvite | null>(null);
   const [loading, setLoading] = useState(true);
   const [emailInput, setEmailInput] = useState('');
@@ -45,8 +46,21 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
   };
 
   useEffect(() => {
-    fetchInvite();
-  }, [ownerUid, token]);
+    if (isOpen) {
+      fetchInvite();
+    }
+  }, [ownerUid, token, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const handleCreateInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,9 +126,17 @@ export const PartnerModal: React.FC<PartnerModalProps> = ({ ownerUid, token, onC
     setTimeout(() => setCopied(false), 2000);
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-950/70 backdrop-blur-xs">
-      <div className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-lg w-full overflow-hidden">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-950/70 backdrop-blur-xs"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-lg w-full overflow-hidden"
+      >
         {/* Header */}
         <div className="p-5 border-b border-stone-200 flex items-center justify-between bg-stone-50">
           <div className="flex items-center gap-2.5">

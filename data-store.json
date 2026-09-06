@@ -1,59 +1,221 @@
 {
-  "deadlines": {
-    "test_user_1_dl_1788670695678_2kozr": {
-      "id": "dl_1788670695678_2kozr",
-      "name": "File quarterly taxes",
-      "dueAt": "2026-09-06T12:00:00.000Z",
-      "createdAt": "2026-09-06T04:58:15.678Z",
-      "status": "met",
-      "latestRiskLevel": "medium"
-    }
-  },
-  "entries": {
-    "test_user_1_dl_1788670695678_2kozr_entry_1788670714334_qx5r6": {
-      "id": "entry_1788670714334_qx5r6",
-      "deadlineId": "dl_1788670695678_2kozr",
-      "category": "transition resistance",
-      "riskLevel": "medium",
-      "summary": "The user is stuck in bed scrolling due to feeling overwhelmed by receipt filing. The agreed plan is to put the phone away, get out of bed, and open the tax folder to enter one number.",
-      "actionItems": [
-        "Put phone face down across the room",
-        "Get out of bed",
-        "Open the tax folder and enter one number"
-      ],
-      "locationTag": "in bed",
-      "conversation": [
-        {
-          "role": "user",
-          "text": "I am stuck in bed scrolling my phone because filing receipts feels overwhelming."
-        },
-        {
-          "role": "assistant",
-          "text": "Classic transition freeze. Put the phone face down across the room. Stand up, open the tax folder, and enter just ONE number."
-        },
-        {
-          "role": "user",
-          "text": "Okay, I will get out of bed and open the folder right now."
-        }
-      ],
-      "createdAt": "2026-09-06T04:58:34.334Z",
-      "notified": false
-    }
-  },
-  "statuses": {
-    "test_user_1": {
-      "streak": 1,
-      "nextDeadlineName": null,
-      "nextDeadlineAt": null,
-      "currentRiskLevel": "none",
-      "updatedAt": "2026-09-06T04:58:34.406Z"
+  "users": {},
+  "tasks": {
+    "14IWMkSHpkbOLv8M33GXljnye1T2_task_1788684984143_u7j8h": {
+      "id": "task_1788684984143_u7j8h",
+      "name": "Pay electric bill",
+      "dueAt": "2026-09-07T08:56:24.142Z",
+      "anchorPhrase": null,
+      "status": "pending",
+      "consequenceType": "unspecified",
+      "patternNote": "",
+      "lastGuaranteedNudgeAt": null,
+      "lastEscalationNudgeAt": null,
+      "createdAt": "2026-09-06T08:56:24.143Z"
     },
-    "demo_owner_101": {
-      "streak": 0,
-      "nextDeadlineName": null,
-      "nextDeadlineAt": null,
-      "currentRiskLevel": "none",
-      "updatedAt": "2026-09-06T05:03:59.499Z"
+    "14IWMkSHpkbOLv8M33GXljnye1T2_task_1788685468627_czxty": {
+      "id": "task_1788685468627_czxty",
+      "name": "Submit Cohort 3 quiz",
+      "dueAt": "2026-09-07T09:04:28.627Z",
+      "anchorPhrase": null,
+      "status": "met",
+      "consequenceType": "unspecified",
+      "patternNote": "",
+      "lastGuaranteedNudgeAt": null,
+      "lastEscalationNudgeAt": null,
+      "createdAt": "2026-09-06T09:04:28.627Z"
+    },
+    "14IWMkSHpkbOLv8M33GXljnye1T2_task_1788685505517_0x9k0": {
+      "id": "task_1788685505517_0x9k0",
+      "name": "submit project before lunch",
+      "dueAt": "2026-09-07T09:05:05.517Z",
+      "anchorPhrase": null,
+      "status": "pending",
+      "consequenceType": "unspecified",
+      "patternNote": "",
+      "lastGuaranteedNudgeAt": null,
+      "lastEscalationNudgeAt": null,
+      "createdAt": "2026-09-06T09:05:05.517Z"
+    },
+    "test-user-debug_task_1788686085457_udykj": {
+      "id": "task_1788686085457_udykj",
+      "name": "Pay electric bill",
+      "dueAt": "2026-09-13T09:14:37.926Z",
+      "anchorPhrase": "next week",
+      "status": "pending",
+      "consequenceType": "hard",
+      "patternNote": "",
+      "lastGuaranteedNudgeAt": null,
+      "lastEscalationNudgeAt": null,
+      "createdAt": "2026-09-06T09:14:45.457Z"
+    },
+    "test-user-debug_task_1788686095380_4vg2a": {
+      "id": "task_1788686095380_4vg2a",
+      "name": "Submit project",
+      "dueAt": "2026-09-07T12:00:00.000Z",
+      "anchorPhrase": "before lunch tomorrow",
+      "status": "pending",
+      "consequenceType": "hard",
+      "patternNote": "",
+      "lastGuaranteedNudgeAt": null,
+      "lastEscalationNudgeAt": null,
+      "createdAt": "2026-09-06T09:14:55.380Z"
+    }
+  },
+  "taskEntries": {},
+  "threadMessages": {
+    "14IWMkSHpkbOLv8M33GXljnye1T2": [
+      {
+        "id": "msg_1788683269013_l80t3",
+        "role": "system",
+        "text": "Last Call online. Type a task to drop on the board, a check-in on an open item, or a log of what you just finished.",
+        "relatedTaskId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T08:27:49.013Z"
+      },
+      {
+        "id": "msg_1788684798111_bsgn0",
+        "role": "user",
+        "text": "Pay electric bill before work tomorrow",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T08:53:18.111Z"
+      },
+      {
+        "id": "msg_1788684870747_ausdg",
+        "role": "user",
+        "text": "Finished grocery run",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T08:54:30.747Z"
+      },
+      {
+        "id": "msg_1788684893642_rnu5u",
+        "role": "system",
+        "text": "Logged: \"Finished grocery run\". (No matching open task on the board).",
+        "relatedTaskId": null,
+        "relatedLogEntryId": "log_1788684893497_8g4wf",
+        "messageType": "normal",
+        "createdAt": "2026-09-06T08:54:53.642Z"
+      },
+      {
+        "id": "msg_1788684904041_ltuk1",
+        "role": "user",
+        "text": "Pay electric bill before work tomorrow",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T08:55:04.041Z"
+      },
+      {
+        "id": "msg_1788684984255_b7ovl",
+        "role": "system",
+        "text": "Set task \"Pay electric bill\" due tomorrow at 8:30 AM.",
+        "relatedTaskId": "task_1788684984143_u7j8h",
+        "relatedLogEntryId": null,
+        "messageType": "task-created",
+        "createdAt": "2026-09-06T08:56:24.255Z"
+      },
+      {
+        "id": "msg_1788685462819_fm15i",
+        "role": "user",
+        "text": "Submit Cohort 3 quiz",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T09:04:22.819Z"
+      },
+      {
+        "id": "msg_1788685468699_03zq3",
+        "role": "system",
+        "text": "Set task 'Submit Cohort 3 quiz' due tomorrow.",
+        "relatedTaskId": "task_1788685468627_czxty",
+        "relatedLogEntryId": null,
+        "messageType": "task-created",
+        "createdAt": "2026-09-06T09:04:28.699Z"
+      },
+      {
+        "id": "msg_1788685490957_xrkfh",
+        "role": "user",
+        "text": "submit project before lunch tomorrow",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T09:04:50.957Z"
+      },
+      {
+        "id": "msg_1788685505557_k3mh4",
+        "role": "system",
+        "text": "Set task 'submit project before lunch' due tomorrow.",
+        "relatedTaskId": "task_1788685505517_0x9k0",
+        "relatedLogEntryId": null,
+        "messageType": "task-created",
+        "createdAt": "2026-09-06T09:05:05.557Z"
+      },
+      {
+        "id": "msg_1788685630655_2i60q",
+        "role": "system",
+        "text": "Marked 'Submit Cohort 3 quiz' done directly from the task panel.",
+        "relatedTaskId": "task_1788685468627_czxty",
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T09:07:10.655Z"
+      }
+    ],
+    "test-user-debug": [
+      {
+        "id": "msg_1788686077402_4ur0c",
+        "role": "user",
+        "text": "pay electric bill next week",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T09:14:37.402Z"
+      },
+      {
+        "id": "msg_1788686085575_mgn5h",
+        "role": "system",
+        "text": "Set task 'Pay electric bill' due next week.",
+        "relatedTaskId": "task_1788686085457_udykj",
+        "relatedLogEntryId": null,
+        "messageType": "task-created",
+        "createdAt": "2026-09-06T09:14:45.575Z"
+      },
+      {
+        "id": "msg_1788686092662_te4o0",
+        "role": "user",
+        "text": "submit project before lunch tomorrow",
+        "relatedTaskId": null,
+        "relatedLogEntryId": null,
+        "messageType": "normal",
+        "createdAt": "2026-09-06T09:14:52.662Z"
+      },
+      {
+        "id": "msg_1788686095434_xuub3",
+        "role": "system",
+        "text": "Set task 'Submit project' due tomorrow at 12:00 PM.",
+        "relatedTaskId": "task_1788686095380_4vg2a",
+        "relatedLogEntryId": null,
+        "messageType": "task-created",
+        "createdAt": "2026-09-06T09:14:55.434Z"
+      }
+    ]
+  },
+  "logEntries": {
+    "14IWMkSHpkbOLv8M33GXljnye1T2": [
+      {
+        "id": "log_1788684893497_8g4wf",
+        "text": "Finished grocery run",
+        "matchedTaskId": null,
+        "createdAt": "2026-09-06T08:54:53.497Z"
+      }
+    ]
+  },
+  "dailyStrip": {
+    "14IWMkSHpkbOLv8M33GXljnye1T2": {
+      "2026-09-06": "Bought groceries"
     }
   },
   "invites": {
@@ -63,6 +225,12 @@
       "partnerUid": null,
       "createdAt": "2026-09-06T04:58:37.366Z",
       "updatedAt": "2026-09-06T04:59:17.286Z"
+    },
+    "14IWMkSHpkbOLv8M33GXljnye1T2": {
+      "email": "siya.kumar2023@vitstudent.ac.in",
+      "status": "pending",
+      "partnerUid": null,
+      "createdAt": "2026-09-06T05:12:57.897Z"
     }
   }
 }

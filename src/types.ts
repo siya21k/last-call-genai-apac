@@ -1,42 +1,55 @@
-export type DeadlineStatus = 'pending' | 'met' | 'missed';
-export type RiskLevel = 'low' | 'medium' | 'critical' | 'none';
-export type LocationTag = 'home' | 'office' | 'in bed' | 'other';
+export type TaskStatus = 'pending' | 'met' | 'missed' | 'released';
+export type ConsequenceType = 'hard' | 'soft' | 'unspecified';
 export type PartnerInviteStatus = 'pending' | 'active' | 'revoked';
 
-export interface Deadline {
+export interface AnchorTimes {
+  beforeWork?: string;
+  afterWork?: string;
+  beforeSleep?: string;
+}
+
+export interface Task {
   id: string;
   name: string;
   dueAt: string;
+  anchorPhrase?: string | null;
+  status: TaskStatus;
+  consequenceType: ConsequenceType;
+  patternNote?: string;
+  lastGuaranteedNudgeAt?: string | null;
+  lastEscalationNudgeAt?: string | null;
   createdAt: string;
-  status: DeadlineStatus;
-  latestRiskLevel: 'low' | 'medium' | 'critical' | null;
 }
 
-export interface CheckInMessage {
-  role: 'user' | 'assistant';
-  text: string;
-  timestamp: string;
-}
-
-export interface CheckInEntry {
+export interface TaskEntry {
   id: string;
-  deadlineId: string;
-  category: string;
-  riskLevel: 'low' | 'medium' | 'critical';
+  taskId: string;
   summary: string;
-  actionItems: string[];
-  locationTag: LocationTag;
-  conversation: CheckInMessage[];
+  nextPhysicalAction: string;
+  conversation: Array<{ role: 'user' | 'assistant'; text: string; timestamp: string }>;
   createdAt: string;
-  notified: boolean;
 }
 
-export interface UserStatus {
-  streak: number;
-  nextDeadlineName: string | null;
-  nextDeadlineAt: string | null;
-  currentRiskLevel: RiskLevel;
-  updatedAt: string;
+export interface LogEntry {
+  id: string;
+  text: string;
+  matchedTaskId: string | null;
+  createdAt: string;
+}
+
+export interface DailyStrip {
+  date: string;
+  line: string;
+}
+
+export interface ThreadMessage {
+  id: string;
+  role: 'user' | 'system';
+  text: string;
+  relatedTaskId?: string | null;
+  relatedLogEntryId?: string | null;
+  messageType?: 'normal' | 'task-created' | 'auto-close' | 'candidate-prompt' | 'reopened' | 'checkin-prompt' | 'amnesty';
+  createdAt: string;
 }
 
 export interface PartnerInvite {
@@ -46,6 +59,11 @@ export interface PartnerInvite {
   createdAt: string;
 }
 
+export interface PartnerStatusView {
+  dailyStripLine: string | null;
+  hasHardConsequenceInEscalationWindow: boolean;
+}
+
 export interface UserProfile {
   uid: string;
   email: string | null;
@@ -53,4 +71,6 @@ export interface UserProfile {
   photoURL: string | null;
   role?: 'owner' | 'partner';
   ownerUid?: string | null;
+  anchorTimes?: AnchorTimes;
+  notificationToken?: string;
 }

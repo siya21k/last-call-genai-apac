@@ -1,29 +1,31 @@
 # Last Call — ADHD Deadline & Focus Journal
 
-A user-authenticated deadline-and-focus journal built for people with ADHD and time-blindness. Built with Google Gemini API, Firebase Authentication, Cloud Firestore, and Google Cloud Run.
+A user-authenticated deadline-and-focus journal engineered specifically for adults with ADHD, executive dysfunction, and time-blindness. Built with Google Gemini API, Firebase Authentication, Cloud Firestore, and Google Cloud Run.
 
 ---
 
 ## 1. System Architecture & Threat Model
 
-### Threat Summary Table
+### Agentic Threat Modeling Summary
 
 | Zone | Threat | Severity | Countermeasure Implemented |
 | :--- | :--- | :--- | :--- |
-| **Input Surfaces** | Prompt injection / parameter tampering on check-in and deadlines | High | Schema validation, length caps, and schema-constrained Gemini JSON mode. |
-| **Planning & Reasoning** | Hallucinated guidance or off-topic conversational drift | Medium | System instructions narrowly bound to task-initiation micro-actions and environmental context. |
-| **Tool / Execution** | Unauthorized Firestore writes bypassing business logic | Critical | Firestore Security Rules deny all client writes to deadlines, entries, and status (`allow write: if false`). Writes occur exclusively via Admin SDK on verified backend endpoints. |
-| **Memory & State** | Cross-user data leakage or privilege escalation | Critical | ABAC/RBAC enforced in `firestore.rules` using custom claims (`role`, `ownerUid`). Partner role is strictly scoped to `users/{uid}/status` with read-only access. |
-| **Inter-System** | Webhook credential exposure or notification spoofing | High | Webhook URLs loaded server-side only via environment variables / Secret Manager; alerts are triggered server-side with sanitized, size-capped payloads. |
+| **Input Surfaces** | Prompt injection / parameter tampering on check-ins, tasks, or corrections | High | Strict schema validation, string sanitization, and Gemini JSON schema-constrained generation with model fallback ladder. |
+| **Planning & Reasoning** | Intent routing confusion, hallucinated coaching, or premature state collapse | Medium | Unified intent router (`task-creation`, `log-entry`, `check-in`, `correction`, `conversation`) decoupled from multi-turn initiation coaching; completion schema fires strictly at session end. |
+| **Tool / Execution** | Direct client database tampering or unauthorized state transitions | Critical | Zero insecure defaults. `firestore.rules` enforces `allow write: if false` on all collections. All database writes execute exclusively via backend Firebase Admin SDK endpoints with authenticated JWT verification. |
+| **Memory & State** | Cross-user data leakage, partner overexposure, or orphaned task records | Critical | Owner-bound path authorization (`request.auth.uid == userId`). Partners never receive Firestore security-rule grants; partner aggregate views are computed on-demand server-side without granting access to raw chat transcripts or tasks. |
+| **Inter-System** | Token hijacking, VAPID key confusion, or hardcoded credentials | High | No hardcoded API keys. Server-side secrets managed via AI Studio / Secret Manager. Client VAPID key treated as public configuration. |
 
 ---
 
-## 2. Prerequisites & Google Cloud Setup
+## 2. Environment & Prerequisites (Google Cloud Starter Tier)
+
+> **Important Deployment Note**: This project is architected for the **Google Cloud Starter Tier**. It runs entirely within a single unified Cloud Run container without requiring Cloud Functions, Cloud Scheduler, or Pub/Sub. No instructions or dependencies for those services are needed or supported.
 
 Ensure you have the Google Cloud SDK (`gcloud`) installed and authenticated:
 
 ```bash
-# Log in with your Google account
+# Authenticate with Google Cloud
 gcloud auth login
 
 # Set active project
@@ -32,98 +34,123 @@ gcloud config set project YOUR_PROJECT_ID
 # Enable required Google Cloud APIs
 gcloud services enable \
   run.googleapis.com \
-  secretmanager.googleapis.com \
   firestore.googleapis.com \
-  identitytoolkit.googleapis.com
+  identitytoolkit.googleapis.com \
+  fcm.googleapis.com \
+  secretmanager.googleapis.com
 ```
 
 ---
 
 ## 3. Secret Management Setup
 
-### Runtime Secrets in Google Cloud Run
+### Runtime Secrets (Cloud Run)
 
-For deployments on Cloud Run, store sensitive credentials in Google Cloud Secret Manager:
+- **AI Studio Build Mode**: The `GEMINI_API_KEY` is auto-provisioned as a server-side environment secret by the AI Studio environment. Never expose it to client-side code or prefix it with `VITE_`.
+- **Standard Tier (Billing Enabled)**: If deploying outside AI Studio to a Standard Tier GCP project, store secrets in Secret Manager:
 
 ```bash
-# 1. Create and populate Gemini API Key secret
+# 1. Create Gemini API Key secret
 gcloud secrets create GEMINI_API_KEY --replication-policy="automatic"
 echo -n "YOUR_GEMINI_API_KEY" | gcloud secrets versions add GEMINI_API_KEY --data-file=-
 
-# 2. (Optional) Create Slack Webhook URL secret for critical initiation alerts
-gcloud secrets create SLACK_WEBHOOK_URL --replication-policy="automatic"
-echo -n "https://hooks.slack.com/services/..." | gcloud secrets versions add SLACK_WEBHOOK_URL --data-file=-
-
-# 3. Grant default Cloud Run compute service account access
+# 2. Grant Cloud Run compute service account access
 PROJECT_NUMBER=$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')
 
 gcloud secrets add-iam-policy-binding GEMINI_API_KEY \
   --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
-
-gcloud secrets add-iam-policy-binding SLACK_WEBHOOK_URL \
-  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
 ```
 
-> **Note for AI Studio Build Mode:** The `GEMINI_API_KEY` is already auto-provisioned as a server-side environment secret by AI Studio. Additional secrets like `SLACK_WEBHOOK_URL` can be entered via AI Studio's **Settings → Secrets** panel.
+- **Starter Tier (Zero-Billing)**: Set `GEMINI_API_KEY` directly as an environment variable in Cloud Run container settings.
 
 ---
 
-## 4. Firestore Database & Security Rules
+## 4. Web Push Notification Setup (Firebase Cloud Messaging)
 
-1. Provision Cloud Firestore in Native Mode:
-```bash
-gcloud firestore databases create --location=nam5
-```
+Firebase Cloud Messaging (FCM) allows Last Call to send deadline and check-in nudges directly to the user's browser:
 
-2. Deploy the security rules defined in `firestore.rules`:
-```bash
-firebase deploy --only firestore:rules
-```
+1. **Enable FCM API**:
+   ```bash
+   gcloud services enable fcm.googleapis.com
+   ```
+2. **Generate Web Push Key Pair (VAPID Key)**:
+   - Navigate to the [Firebase Console](https://console.firebase.google.com/) → Select your Project.
+   - Go to **Project Settings** (gear icon) → **Cloud Messaging** tab.
+   - Under **Web configuration**, click **Generate key pair**.
+   - Copy the generated Key pair.
+3. **Configure the VAPID Key**:
+   - The Web Push VAPID key is a **public-facing client configuration value**, NOT a server secret.
+   - Provide it in client configuration or `.env` as `VITE_FIREBASE_VAPID_KEY`. Do not place it in Secret Manager.
+   - Server-side FCM dispatch uses the existing Firebase Admin SDK default credentials without needing extra Secret Manager bindings.
 
-### Exact Firestore Rules Summary
+---
+
+## 5. Cloud Firestore Database & Security Rules
+
+### Production Security Rules (`firestore.rules`)
+
+The security architecture enforces complete client-write lockout. All writes happen via verified backend Admin SDK endpoints. Partners have zero direct access to Firestore documents.
+
 ```javascript
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
-    }
-    function isPartnerOf(uid) {
-      return request.auth != null &&
-        request.auth.token.role == 'partner' &&
-        request.auth.token.ownerUid == uid;
-    }
+    function isOwner(uid) { return request.auth != null && request.auth.uid == uid; }
 
-    match /users/{uid}/status/{document} {
-      allow read: if isOwner(uid) || isPartnerOf(uid);
-      allow write: if false; // Admin SDK only
-    }
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if false;
 
-    match /users/{uid}/deadlines/{deadlineId} {
-      allow read: if isOwner(uid);
-      allow write: if false; // Admin SDK only
-    }
+      match /tasks/{taskId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
 
-    match /users/{uid}/entries/{entryId} {
-      allow read: if isOwner(uid);
-      allow write: if false; // Admin SDK only
-    }
+        match /entries/{entryId} {
+          allow read: if isOwner(userId);
+          allow write: if false;
+        }
+      }
 
-    match /users/{uid}/partnerInvite/{document} {
-      allow read: if isOwner(uid);
-      allow write: if false; // Admin SDK only
+      match /logEntries/{logEntryId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /dailyStrip/{dateId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /threadMessages/{messageId} {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
+
+      match /partnerInvite/current {
+        allow read: if isOwner(userId);
+        allow write: if false;
+      }
     }
   }
 }
 ```
 
+### Key Security Design Guarantees:
+1. **Admin SDK Write Boundary**: Clients can never write directly to `tasks`, `entries`, `logEntries`, `dailyStrip`, `threadMessages`, or `partnerInvite`. All mutations pass through verified server-side validation.
+2. **Pinned Partner Document**: `partnerInvite` is pinned at the singleton ID `current`, preventing unbounded invite collection spam.
+3. **Zero Partner Rule Grants**: Accountability partners are never granted direct Firestore reads. The partner view is synthesized on demand by `/api/partner/summary` using Admin SDK permissions, returning only aggregate metrics (streak, focus risk, next deadline) without exposing private transcripts.
+
+### Deploying Security Rules:
+```bash
+firebase deploy --only firestore:rules
+```
+
 ---
 
-## 5. Cloud Run Deployment
+## 6. Cloud Run Deployment
 
-Deploy the container to Cloud Run using `gcloud run deploy`:
+Deploy the self-contained Express + Vite production bundle directly to Cloud Run:
 
 ```bash
 gcloud run deploy last-call \
@@ -131,12 +158,12 @@ gcloud run deploy last-call \
   --platform managed \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,SLACK_WEBHOOK_URL=SLACK_WEBHOOK_URL:latest"
+  --set-env-vars="NODE_ENV=production"
 ```
 
-### Required Campaign Verification Binding
+### Required Challenge Verification Campaign Labeling
 
-Apply the mandatory challenge label to register the service for automated verification:
+To register the application for automated challenge and hackathon verification, apply the mandatory campaign resource label:
 
 ```bash
 gcloud run services update last-call \
@@ -146,64 +173,87 @@ gcloud run services update last-call \
 
 ---
 
-## 6. Role-Based Access Control (RBAC) Admin Workflow
+## 7. Out-of-Band Partner RBAC Scripts
 
-To protect user confidentiality, custom claims can only be provisioned server-side by an administrator out-of-band:
+Accountability partner custom claims are provisioned strictly out-of-band by administrators to ensure zero client privilege escalation:
 
-### Step 1: Owner sends invite in the application
-1. The owner opens **Partner** in the app header and enters the partner's email address.
-2. The server creates `users/{ownerUid}/partnerInvite/current` with status `pending`.
-
-### Step 2: Administrator activates the partner role
-The administrator runs the CLI script in Cloud Shell or a secure terminal session:
-
+### 1. Assigning an Accountability Partner
 ```bash
-node scripts/assign-partner.js --email partner@example.com --ownerUid <OWNER_UID>
+node scripts/assign-partner.js --email partner@example.com --ownerUid <OWNER_UID> [--confirm-overwrite]
 ```
+- Looks up the registered Firebase user by email.
+- Sets verified custom claims `{ role: 'partner', ownerUid: '<OWNER_UID>' }`.
+- Updates `users/{ownerUid}/partnerInvite/current` to `status: 'active'`.
 
-- Verifies that the partner has a registered Firebase account.
-- Sets custom claims `{ role: 'partner', ownerUid: '<OWNER_UID>' }`.
-- Atomically updates the invite document to status `active`.
-- Prevents accidental overwrites of existing active partners unless `--confirm-overwrite` is passed.
-
-### Step 3: Revoking a partner
-The owner or administrator can revoke access at any time:
-
+### 2. Revoking an Accountability Partner
 ```bash
 node scripts/revoke-partner.js --ownerUid <OWNER_UID>
 ```
-This clears custom claims on the partner account and marks the invite as `revoked`.
+- Revokes custom claims from the active partner account.
+- Sets `users/{ownerUid}/partnerInvite/current` to `status: 'revoked'`.
 
 ---
 
-## 7. Functional Stability & Walkthrough Test Cases
+## 8. Comprehensive Interactive Walkthrough & Test Cases
 
-Every user interaction has been implemented and tested:
+Every user interaction has a corresponding end-to-end test verification procedure:
 
-### Test Case 1: Google Sign-In & Instant Preview Mode
-1. **Action**: Click "Sign In with Google" on landing screen (or click "Test as Owner" in iframe preview).
-2. **Expected Outcome**: App authenticates without asking for passwords, loads user profile, and initializes dashboard.
+### Test Case 1: Passwordless Google Authentication & User Profile
+1. **Action**: Click "Sign in with Google" on the login screen.
+2. **Expected Outcome**: Firebase Authentication authenticates the user without custom password handling. Backend provisions the user record with default anchor times (Wake 08:00, Work 09:00, EOD 17:00, Bed 23:00) and displays the main board.
 
-### Test Case 2: Adding a Deadline
-1. **Action**: Click "Add Deadline", enter name "Complete client proposal", select time horizon (e.g. "In 2 Hours"), and submit.
-2. **Expected Outcome**: Backend endpoint validates input, persists deadline via Admin SDK, triggers status recomputation, and returns updated list and next deadline summary.
+### Test Case 2: Natural Language Task Creation & Anchor Mapping
+1. **Action**: In the terminal prompt, type: `"Call mom before work tomorrow morning"` or `"File taxes hard deadline by end of day"`.
+2. **Expected Outcome**:
+   - Router classifies message as `task-creation`.
+   - Extracts deadline mapped to user's anchor times (e.g. Work: 09:00, EOD: 17:00).
+   - Task card appears in the Board with consequence badge (`hard` / `soft`).
 
-### Test Case 3: Task Initiation Check-In with Gemini
-1. **Action**: Click "Check In" on an active deadline. Select location tag (e.g., "In Bed" or "Office"). Type: "I am frozen scrolling because the outline feels too big."
-2. **Expected Outcome**: Last Call responds with blunt, non-shaming initiation coaching ("Pick one sentence. Set a 2-minute timer.").
+### Test Case 3: Activity Logging & High-Confidence Auto-Close
+1. **Action**: With a pending task `"Submit payroll"`, type: `"Just finished submitting payroll"`.
+2. **Expected Outcome**:
+   - Router classifies message as `log-entry`.
+   - Matches `"Submit payroll"` with high confidence.
+   - Task status transitions to `met`.
+   - An inline auto-close card appears in the thread with an `[Undo]` button and confirmation message.
 
-### Test Case 4: Structured Extraction & Micro-Actions
-1. **Action**: Click "Finish Check-In & Save".
-2. **Expected Outcome**: Gemini structured extraction returns category, risk level, summary, and interactive checkboxes for immediate micro-actions. Deadline's `latestRiskLevel` is updated. If risk is critical and Slack webhook is configured, an alert is transmitted.
+### Test Case 4: Disambiguated Undo / Reversal with Intervening Logs
+1. **Action**: Auto-close Task A (`"Call vet"`). Next, send an unrelated message `"Drank a glass of water"`. Then type `"wrong one"`.
+2. **Expected Outcome**:
+   - Router classifies message as `correction`.
+   - System bypasses the normal water log entry and identifies the most recent `auto-close` message.
+   - Reopens Task A to `pending`, unlinks the vet log entry, and confirms reversal without affecting other tasks.
+   - Alternatively, typing `"wrong one on vet"` specifically targets the vet task regardless of order.
 
-### Test Case 5: Post-Mortem Check-In on Missed Deadlines
-1. **Action**: Start check-in on a deadline whose target time has passed.
-2. **Expected Outcome**: Session explicitly accommodates post-mortems with non-judgmental root cause exploration rather than failing or disabling check-in.
+### Test Case 5: Multi-Turn Task Initiation Check-In Coaching
+1. **Action**: Type `"stuck on my report, feeling frozen"` or click the **Check in / Break paralysis** button on a task card.
+2. **Expected Outcome**:
+   - Direct button initiation bypasses the classifier schema.
+   - Gemini initiation coach provides blunt, anti-avoidance coaching (1-2 sentences) and identifies the paralysis barrier.
+   - Conversation supports multi-turn dialogue to talk through the obstacle.
 
-### Test Case 6: Marking Tasks Done (Including Late Finishes)
-1. **Action**: Click "Done" (or "Mark Done Late") on any pending or missed task.
-2. **Expected Outcome**: Status updates to `met`, streak increments, and next upcoming deadline is recalibrated.
+### Test Case 6: Check-In Completion Schema & Subcollection Persistence
+1. **Action**: Click **Done micro-step** or send completion prompt.
+2. **Expected Outcome**:
+   - Router / endpoint fires `extractCheckInCompletion` strictly once at the end of the session.
+   - Saves structured summary and `nextPhysicalAction` into `users/{userId}/tasks/{taskId}/entries/{entryId}`.
+   - Acknowledges locked micro-action in the chat thread.
 
-### Test Case 7: Accountability Partner Read-Only Isolation
-1. **Action**: Log in with custom claims `{ role: 'partner', ownerUid: '<OWNER_UID>' }`.
-2. **Expected Outcome**: Partner view displays exclusively aggregate status (streak, risk level, next deadline). Private entries and conversation transcripts are hidden and blocked at the security rule level.
+### Test Case 7: Shame-Free Task Amnesty (Release)
+1. **Action**: On an overdue or overwhelming task, click the **Release task (Amnesty)** button (feather icon).
+2. **Expected Outcome**:
+   - Backend marks task status as `released`.
+   - Task moves off the active radar without negative streak penalties or failure badges.
+   - Amnesty record is added to the chat thread.
+
+### Test Case 8: Accountability Partner Modal Dismissibility
+1. **Action**: Open Partner Modal via header or side panel. Send an invite email. With invite pending, click the **X** button, the **Close** button, or press `Escape`.
+2. **Expected Outcome**:
+   - Modal dismisses cleanly and does not reopen on re-render.
+   - Invite remains safely in `pending` status on the server.
+
+### Test Case 9: Accountability Partner Read-Only Aggregate Isolation
+1. **Action**: Authenticate with partner custom claims `{ role: 'partner', ownerUid: '<OWNER_UID>' }`.
+2. **Expected Outcome**:
+   - Partner view displays solely the partner summary (streak count, active focus risk, upcoming deadline title).
+   - Chat threads, log entries, and check-in subcollections are completely hidden and inaccessible.
